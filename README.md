@@ -21,7 +21,7 @@ Customers send messages in English, Bahasa Melayu, Chinese, or a mix. Quora Chat
 - [Hono](https://hono.dev): HTTP layer, mounted at `/api/*` inside Start
 - [oRPC](https://orpc.unnoq.com): typed RPC at `/api/rpc`, with streaming workflow progress
 - [Drizzle ORM](https://orm.drizzle.team) on [Replit Database](https://replit.com/products/database) (Postgres)
-- Replit AI Integrations (OpenAI-compatible) for message parsing and replies
+- OpenRouter (OpenAI-compatible API) for message parsing and replies
 - Tailwind CSS v4 and shadcn/ui, plus `@react-pdf/renderer` for quotation PDFs
 
 ## Getting started
@@ -34,7 +34,7 @@ pnpm db:seed              # load the 3 demo businesses
 pnpm dev                  # http://localhost:3000
 ```
 
-If Replit AI Integrations aren't reachable from your machine, set `OPENAI_API_KEY` instead. It's used only when the `AI_INTEGRATIONS_*` vars are empty.
+Set `OPENROUTER_API_KEY` (from https://openrouter.ai/keys). `AI_MODEL` takes an OpenRouter model id and defaults to `openai/gpt-5-mini`; it must support structured outputs.
 
 ## Demo businesses
 
@@ -53,7 +53,7 @@ src/
   data/demo.ts          synthetic businesses, catalogs, pricing rules, sample messages
   db/                   Drizzle schema, client, seed script
   server/
-    ai.ts               extraction and reply generation (Replit AI / OpenAI)
+    ai.ts               extraction and reply generation (OpenRouter)
     pricing.ts          deterministic pricing engine
     workflow.ts         message → request → outcome → approval
     orbyte.ts           simulated Orbyte activity events
@@ -78,4 +78,4 @@ src/
 
 ## Deploying on Replit
 
-Import the repo into Replit and add the **Database** and **AI Integrations** tools. Both set their env vars automatically. Then run `pnpm db:push && pnpm db:seed` once. `.replit` already configures the build and run commands for deployments.
+Import the repo into Replit and add the **Database** tool (it sets `DATABASE_URL`), and add `OPENROUTER_API_KEY` in **Secrets**. Then run `pnpm db:push && pnpm db:seed` once. `.replit` already configures the build and run commands for deployments.

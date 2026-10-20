@@ -5,24 +5,24 @@ import type { CatalogProduct, Outcome } from "./pricing";
 
 let client: OpenAI | undefined;
 
-/** Replit AI Integrations first, plain OpenAI key as a local fallback. */
+/** OpenRouter, via its OpenAI-compatible API. */
 function getClient() {
 	if (client) return client;
-	const replitKey = process.env.AI_INTEGRATIONS_OPENAI_API_KEY;
-	const replitUrl = process.env.AI_INTEGRATIONS_OPENAI_BASE_URL;
-	if (replitKey && replitUrl) {
-		client = new OpenAI({ apiKey: replitKey, baseURL: replitUrl });
-	} else if (process.env.OPENAI_API_KEY) {
-		client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-	} else {
-		throw new Error(
-			"No AI credentials. Set AI_INTEGRATIONS_OPENAI_* or OPENAI_API_KEY in .env.",
-		);
+	const apiKey = process.env.OPENROUTER_API_KEY;
+	if (!apiKey) {
+		throw new Error("No AI credentials. Set OPENROUTER_API_KEY in .env.");
 	}
+	client = new OpenAI({
+		apiKey,
+		baseURL: "https://openrouter.ai/api/v1",
+		defaultHeaders: { "X-Title": "Quora Chat" },
+	});
 	return client;
 }
 
-const model = () => process.env.AI_MODEL || "gpt-5-mini";
+// OpenRouter model ids are "provider/model". The model must support
+// structured outputs (json_schema), which extraction relies on.
+const model = () => process.env.AI_MODEL || "openai/gpt-5-mini";
 
 // --- Extraction -------------------------------------------------------------
 
