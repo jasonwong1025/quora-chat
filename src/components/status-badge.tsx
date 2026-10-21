@@ -21,7 +21,26 @@ const styles = {
 		label: "Rejected",
 		className: "bg-status-rejected/15 text-status-rejected",
 	},
+	sent: {
+		label: "Awaiting signature",
+		className: "bg-status-draft/15 text-status-draft",
+	},
+	accepted: {
+		label: "Signed",
+		className: "bg-status-approved/15 text-status-approved",
+	},
 } as const;
+
+/** Badge status for a quote row (draft / approved / rejected / accepted). */
+export function quoteBadge(
+	status: "draft" | "approved" | "rejected" | "accepted",
+): RequestStatus {
+	return status === "draft"
+		? "draft_ready"
+		: status === "approved"
+			? "sent"
+			: status;
+}
 
 export type RequestStatus = keyof typeof styles;
 

@@ -1,5 +1,4 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { Link } from "@tanstack/react-router";
 import { Check, ExternalLink, Loader2, Plus, Trash2, X } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
@@ -12,6 +11,13 @@ import type { BusinessDetail, RequestRow, Staff } from "#/lib/types";
 import { orpc } from "#/orpc/client";
 
 type Quote = NonNullable<RequestRow["quote"]>;
+
+const quoteStatusLabel: Record<Quote["status"], string> = {
+	draft: "Draft",
+	approved: "Approved · awaiting signature",
+	rejected: "Rejected",
+	accepted: "Signed by customer",
+};
 
 /** Render with a `key` that changes when the server version changes, to reset local edits. */
 export function QuoteEditor(props: {
@@ -91,16 +97,17 @@ export function QuoteEditor(props: {
 				<p className="text-sm font-semibold">
 					{quote.number}{" "}
 					<span className="font-normal text-muted-foreground">
-						· {editable ? "Draft" : quote.status}
+						· {editable ? "Draft" : quoteStatusLabel[quote.status]}
 					</span>
 				</p>
-				<Link
-					to="/quotes/$quoteId"
-					params={{ quoteId: quote.id }}
+				<a
+					href={`/api/quotes/${quote.id}/pdf`}
+					target="_blank"
+					rel="noreferrer"
 					className="flex items-center gap-1 text-xs text-primary hover:underline"
 				>
-					Open <ExternalLink className="size-3" />
-				</Link>
+					PDF <ExternalLink className="size-3" />
+				</a>
 			</div>
 
 			<div className="overflow-x-auto">
@@ -124,7 +131,7 @@ export function QuoteEditor(props: {
 								key={`${quote.id}-${i}`}
 								className="border-b align-top last:border-0"
 							>
-								<td className="px-3 py-1.5">
+								<td className="min-w-44 px-3 py-1.5">
 									{editable ? (
 										<Input
 											value={l.description}

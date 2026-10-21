@@ -13,7 +13,8 @@ const id = () =>
 		.primaryKey()
 		.$defaultFn(() => crypto.randomUUID());
 
-const createdAt = () => timestamp("created_at").defaultNow().notNull();
+const createdAt = () =>
+	timestamp("created_at", { withTimezone: true }).defaultNow().notNull();
 
 // All money is stored in sen (1 MYR = 100 sen) to avoid float rounding.
 
@@ -104,6 +105,11 @@ export const conversations = pgTable("conversations", {
 		.references(() => businesses.id, { onDelete: "cascade" }),
 	customerName: text("customer_name").notNull(),
 	customerPhone: text("customer_phone"),
+	/** True while a staff member has taken over; the AI stays quiet. */
+	aiPaused: boolean("ai_paused").default(false).notNull(),
+	handledBy: text("handled_by").references(() => staff.id, {
+		onDelete: "set null",
+	}),
 	createdAt: createdAt(),
 });
 
@@ -121,6 +127,7 @@ export const messages = pgTable("messages", {
 	sender: messageSender("sender").notNull(),
 	body: text("body").notNull(),
 	quoteId: text("quote_id"), // set when the message carries an approved quote
+	authorName: text("author_name"), // staff member who wrote it, if any
 	createdAt: createdAt(),
 });
 
@@ -171,7 +178,9 @@ export const quoteRequests = pgTable("quote_requests", {
 	extracted: jsonb("extracted").$type<ExtractedRequest>().notNull(),
 	flags: jsonb("flags").$type<Flag[]>().default([]).notNull(),
 	createdAt: createdAt(),
-	updatedAt: timestamp("updated_at").defaultNow().notNull(),
+	updatedAt: timestamp("updated_at", { withTimezone: true })
+		.defaultNow()
+		.notNull(),
 });
 
 export type LineItem = {
@@ -186,8 +195,9 @@ export type LineItem = {
 
 export const quoteStatus = pgEnum("quote_status", [
 	"draft",
-	"approved",
+	"approved", // approved by staff and sent for signature
 	"rejected",
+	"accepted", // signed by the customer
 ]);
 
 export const quotes = pgTable("quotes", {
@@ -205,9 +215,14 @@ export const quotes = pgTable("quotes", {
 	sstSen: integer("sst_sen").notNull(),
 	totalSen: integer("total_sen").notNull(),
 	notes: text("notes"),
-	validUntil: timestamp("valid_until").notNull(),
+	validUntil: timestamp("valid_until", { withTimezone: true }).notNull(),
 	decidedBy: text("decided_by").references(() => staff.id),
-	decidedAt: timestamp("decided_at"),
+	decidedAt: timestamp("decided_at", { withTimezone: true }),
+	// eSign: the customer reviews and signs the approved quote.
+	viewedAt: timestamp("viewed_at", { withTimezone: true }),
+	signedAt: timestamp("signed_at", { withTimezone: true }),
+	signerName: text("signer_name"),
+	signatureImage: text("signature_image"), // PNG data URL
 	createdAt: createdAt(),
 });
 

@@ -10,12 +10,28 @@
 
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
+import { Route as WhatsappRouteImport } from './routes/whatsapp'
 import { Route as ApiSplatRouteImport } from './routes/api.$'
-import { Route as QuotesQuoteIdRouteImport } from './routes/quotes.$quoteId'
+import { Route as OrbyteIndexRouteImport } from './routes/orbyte.index'
+import { Route as OrbyteBusinessIdRouteImport } from './routes/orbyte.$businessId'
+import { Route as SignQuoteIdRouteImport } from './routes/sign.$quoteId'
+import { Route as OrbyteBusinessIdIndexRouteImport } from './routes/orbyte.$businessId.index'
+import { Route as OrbyteBusinessIdConnectRouteImport } from './routes/orbyte.$businessId.connect'
+import { Route as OrbyteBusinessIdEsignRouteImport } from './routes/orbyte.$businessId.esign'
+import { Route as OrbyteBusinessIdInboxRouteImport } from './routes/orbyte.$businessId.inbox'
+import { Route as OrbyteBusinessIdPeopleRouteImport } from './routes/orbyte.$businessId.people'
+import { Route as OrbyteBusinessIdProductsRouteImport } from './routes/orbyte.$businessId.products'
+import { Route as OrbyteBusinessIdQuotesRouteImport } from './routes/orbyte.$businessId.quotes'
+import { Route as OrbyteBusinessIdWorkRouteImport } from './routes/orbyte.$businessId.work'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
   path: '/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const WhatsappRoute = WhatsappRouteImport.update({
+  id: '/whatsapp',
+  path: '/whatsapp',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ApiSplatRoute = ApiSplatRouteImport.update({
@@ -23,40 +39,168 @@ const ApiSplatRoute = ApiSplatRouteImport.update({
   path: '/api/$',
   getParentRoute: () => rootRouteImport,
 } as any)
-const QuotesQuoteIdRoute = QuotesQuoteIdRouteImport.update({
-  id: '/quotes/$quoteId',
-  path: '/quotes/$quoteId',
+const OrbyteIndexRoute = OrbyteIndexRouteImport.update({
+  id: '/orbyte/',
+  path: '/orbyte/',
   getParentRoute: () => rootRouteImport,
+} as any)
+const OrbyteBusinessIdRoute = OrbyteBusinessIdRouteImport.update({
+  id: '/orbyte/$businessId',
+  path: '/orbyte/$businessId',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const SignQuoteIdRoute = SignQuoteIdRouteImport.update({
+  id: '/sign/$quoteId',
+  path: '/sign/$quoteId',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const OrbyteBusinessIdIndexRoute = OrbyteBusinessIdIndexRouteImport.update({
+  id: '/',
+  path: '/',
+  getParentRoute: () => OrbyteBusinessIdRoute,
+} as any)
+const OrbyteBusinessIdConnectRoute = OrbyteBusinessIdConnectRouteImport.update({
+  id: '/connect',
+  path: '/connect',
+  getParentRoute: () => OrbyteBusinessIdRoute,
+} as any)
+const OrbyteBusinessIdEsignRoute = OrbyteBusinessIdEsignRouteImport.update({
+  id: '/esign',
+  path: '/esign',
+  getParentRoute: () => OrbyteBusinessIdRoute,
+} as any)
+const OrbyteBusinessIdInboxRoute = OrbyteBusinessIdInboxRouteImport.update({
+  id: '/inbox',
+  path: '/inbox',
+  getParentRoute: () => OrbyteBusinessIdRoute,
+} as any)
+const OrbyteBusinessIdPeopleRoute = OrbyteBusinessIdPeopleRouteImport.update({
+  id: '/people',
+  path: '/people',
+  getParentRoute: () => OrbyteBusinessIdRoute,
+} as any)
+const OrbyteBusinessIdProductsRoute =
+  OrbyteBusinessIdProductsRouteImport.update({
+    id: '/products',
+    path: '/products',
+    getParentRoute: () => OrbyteBusinessIdRoute,
+  } as any)
+const OrbyteBusinessIdQuotesRoute = OrbyteBusinessIdQuotesRouteImport.update({
+  id: '/quotes',
+  path: '/quotes',
+  getParentRoute: () => OrbyteBusinessIdRoute,
+} as any)
+const OrbyteBusinessIdWorkRoute = OrbyteBusinessIdWorkRouteImport.update({
+  id: '/work',
+  path: '/work',
+  getParentRoute: () => OrbyteBusinessIdRoute,
 } as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
+  '/whatsapp': typeof WhatsappRoute
   '/api/$': typeof ApiSplatRoute
-  '/quotes/$quoteId': typeof QuotesQuoteIdRoute
+  '/orbyte/$businessId': typeof OrbyteBusinessIdRouteWithChildren
+  '/sign/$quoteId': typeof SignQuoteIdRoute
+  '/orbyte/': typeof OrbyteIndexRoute
+  '/orbyte/$businessId/connect': typeof OrbyteBusinessIdConnectRoute
+  '/orbyte/$businessId/esign': typeof OrbyteBusinessIdEsignRoute
+  '/orbyte/$businessId/inbox': typeof OrbyteBusinessIdInboxRoute
+  '/orbyte/$businessId/people': typeof OrbyteBusinessIdPeopleRoute
+  '/orbyte/$businessId/products': typeof OrbyteBusinessIdProductsRoute
+  '/orbyte/$businessId/quotes': typeof OrbyteBusinessIdQuotesRoute
+  '/orbyte/$businessId/work': typeof OrbyteBusinessIdWorkRoute
+  '/orbyte/$businessId/': typeof OrbyteBusinessIdIndexRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
+  '/whatsapp': typeof WhatsappRoute
   '/api/$': typeof ApiSplatRoute
-  '/quotes/$quoteId': typeof QuotesQuoteIdRoute
+  '/sign/$quoteId': typeof SignQuoteIdRoute
+  '/orbyte': typeof OrbyteIndexRoute
+  '/orbyte/$businessId/connect': typeof OrbyteBusinessIdConnectRoute
+  '/orbyte/$businessId/esign': typeof OrbyteBusinessIdEsignRoute
+  '/orbyte/$businessId/inbox': typeof OrbyteBusinessIdInboxRoute
+  '/orbyte/$businessId/people': typeof OrbyteBusinessIdPeopleRoute
+  '/orbyte/$businessId/products': typeof OrbyteBusinessIdProductsRoute
+  '/orbyte/$businessId/quotes': typeof OrbyteBusinessIdQuotesRoute
+  '/orbyte/$businessId/work': typeof OrbyteBusinessIdWorkRoute
+  '/orbyte/$businessId': typeof OrbyteBusinessIdIndexRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
+  '/whatsapp': typeof WhatsappRoute
   '/api/$': typeof ApiSplatRoute
-  '/quotes/$quoteId': typeof QuotesQuoteIdRoute
+  '/orbyte/$businessId': typeof OrbyteBusinessIdRouteWithChildren
+  '/sign/$quoteId': typeof SignQuoteIdRoute
+  '/orbyte/': typeof OrbyteIndexRoute
+  '/orbyte/$businessId/connect': typeof OrbyteBusinessIdConnectRoute
+  '/orbyte/$businessId/esign': typeof OrbyteBusinessIdEsignRoute
+  '/orbyte/$businessId/inbox': typeof OrbyteBusinessIdInboxRoute
+  '/orbyte/$businessId/people': typeof OrbyteBusinessIdPeopleRoute
+  '/orbyte/$businessId/products': typeof OrbyteBusinessIdProductsRoute
+  '/orbyte/$businessId/quotes': typeof OrbyteBusinessIdQuotesRoute
+  '/orbyte/$businessId/work': typeof OrbyteBusinessIdWorkRoute
+  '/orbyte/$businessId/': typeof OrbyteBusinessIdIndexRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/api/$' | '/quotes/$quoteId'
+  fullPaths:
+    | '/'
+    | '/whatsapp'
+    | '/api/$'
+    | '/orbyte/$businessId'
+    | '/sign/$quoteId'
+    | '/orbyte/'
+    | '/orbyte/$businessId/connect'
+    | '/orbyte/$businessId/esign'
+    | '/orbyte/$businessId/inbox'
+    | '/orbyte/$businessId/people'
+    | '/orbyte/$businessId/products'
+    | '/orbyte/$businessId/quotes'
+    | '/orbyte/$businessId/work'
+    | '/orbyte/$businessId/'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/api/$' | '/quotes/$quoteId'
-  id: '__root__' | '/' | '/api/$' | '/quotes/$quoteId'
+  to:
+    | '/'
+    | '/whatsapp'
+    | '/api/$'
+    | '/sign/$quoteId'
+    | '/orbyte'
+    | '/orbyte/$businessId/connect'
+    | '/orbyte/$businessId/esign'
+    | '/orbyte/$businessId/inbox'
+    | '/orbyte/$businessId/people'
+    | '/orbyte/$businessId/products'
+    | '/orbyte/$businessId/quotes'
+    | '/orbyte/$businessId/work'
+    | '/orbyte/$businessId'
+  id:
+    | '__root__'
+    | '/'
+    | '/whatsapp'
+    | '/api/$'
+    | '/orbyte/$businessId'
+    | '/sign/$quoteId'
+    | '/orbyte/'
+    | '/orbyte/$businessId/connect'
+    | '/orbyte/$businessId/esign'
+    | '/orbyte/$businessId/inbox'
+    | '/orbyte/$businessId/people'
+    | '/orbyte/$businessId/products'
+    | '/orbyte/$businessId/quotes'
+    | '/orbyte/$businessId/work'
+    | '/orbyte/$businessId/'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
+  WhatsappRoute: typeof WhatsappRoute
   ApiSplatRoute: typeof ApiSplatRoute
-  QuotesQuoteIdRoute: typeof QuotesQuoteIdRoute
+  OrbyteBusinessIdRoute: typeof OrbyteBusinessIdRouteWithChildren
+  SignQuoteIdRoute: typeof SignQuoteIdRoute
+  OrbyteIndexRoute: typeof OrbyteIndexRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -68,6 +212,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof IndexRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/whatsapp': {
+      id: '/whatsapp'
+      path: '/whatsapp'
+      fullPath: '/whatsapp'
+      preLoaderRoute: typeof WhatsappRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/api/$': {
       id: '/api/$'
       path: '/api/$'
@@ -75,20 +226,118 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiSplatRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/quotes/$quoteId': {
-      id: '/quotes/$quoteId'
-      path: '/quotes/$quoteId'
-      fullPath: '/quotes/$quoteId'
-      preLoaderRoute: typeof QuotesQuoteIdRouteImport
+    '/orbyte/': {
+      id: '/orbyte/'
+      path: '/orbyte'
+      fullPath: '/orbyte/'
+      preLoaderRoute: typeof OrbyteIndexRouteImport
       parentRoute: typeof rootRouteImport
+    }
+    '/orbyte/$businessId': {
+      id: '/orbyte/$businessId'
+      path: '/orbyte/$businessId'
+      fullPath: '/orbyte/$businessId'
+      preLoaderRoute: typeof OrbyteBusinessIdRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/sign/$quoteId': {
+      id: '/sign/$quoteId'
+      path: '/sign/$quoteId'
+      fullPath: '/sign/$quoteId'
+      preLoaderRoute: typeof SignQuoteIdRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/orbyte/$businessId/': {
+      id: '/orbyte/$businessId/'
+      path: '/'
+      fullPath: '/orbyte/$businessId/'
+      preLoaderRoute: typeof OrbyteBusinessIdIndexRouteImport
+      parentRoute: typeof OrbyteBusinessIdRoute
+    }
+    '/orbyte/$businessId/connect': {
+      id: '/orbyte/$businessId/connect'
+      path: '/connect'
+      fullPath: '/orbyte/$businessId/connect'
+      preLoaderRoute: typeof OrbyteBusinessIdConnectRouteImport
+      parentRoute: typeof OrbyteBusinessIdRoute
+    }
+    '/orbyte/$businessId/esign': {
+      id: '/orbyte/$businessId/esign'
+      path: '/esign'
+      fullPath: '/orbyte/$businessId/esign'
+      preLoaderRoute: typeof OrbyteBusinessIdEsignRouteImport
+      parentRoute: typeof OrbyteBusinessIdRoute
+    }
+    '/orbyte/$businessId/inbox': {
+      id: '/orbyte/$businessId/inbox'
+      path: '/inbox'
+      fullPath: '/orbyte/$businessId/inbox'
+      preLoaderRoute: typeof OrbyteBusinessIdInboxRouteImport
+      parentRoute: typeof OrbyteBusinessIdRoute
+    }
+    '/orbyte/$businessId/people': {
+      id: '/orbyte/$businessId/people'
+      path: '/people'
+      fullPath: '/orbyte/$businessId/people'
+      preLoaderRoute: typeof OrbyteBusinessIdPeopleRouteImport
+      parentRoute: typeof OrbyteBusinessIdRoute
+    }
+    '/orbyte/$businessId/products': {
+      id: '/orbyte/$businessId/products'
+      path: '/products'
+      fullPath: '/orbyte/$businessId/products'
+      preLoaderRoute: typeof OrbyteBusinessIdProductsRouteImport
+      parentRoute: typeof OrbyteBusinessIdRoute
+    }
+    '/orbyte/$businessId/quotes': {
+      id: '/orbyte/$businessId/quotes'
+      path: '/quotes'
+      fullPath: '/orbyte/$businessId/quotes'
+      preLoaderRoute: typeof OrbyteBusinessIdQuotesRouteImport
+      parentRoute: typeof OrbyteBusinessIdRoute
+    }
+    '/orbyte/$businessId/work': {
+      id: '/orbyte/$businessId/work'
+      path: '/work'
+      fullPath: '/orbyte/$businessId/work'
+      preLoaderRoute: typeof OrbyteBusinessIdWorkRouteImport
+      parentRoute: typeof OrbyteBusinessIdRoute
     }
   }
 }
 
+interface OrbyteBusinessIdRouteChildren {
+  OrbyteBusinessIdConnectRoute: typeof OrbyteBusinessIdConnectRoute
+  OrbyteBusinessIdEsignRoute: typeof OrbyteBusinessIdEsignRoute
+  OrbyteBusinessIdInboxRoute: typeof OrbyteBusinessIdInboxRoute
+  OrbyteBusinessIdPeopleRoute: typeof OrbyteBusinessIdPeopleRoute
+  OrbyteBusinessIdProductsRoute: typeof OrbyteBusinessIdProductsRoute
+  OrbyteBusinessIdQuotesRoute: typeof OrbyteBusinessIdQuotesRoute
+  OrbyteBusinessIdWorkRoute: typeof OrbyteBusinessIdWorkRoute
+  OrbyteBusinessIdIndexRoute: typeof OrbyteBusinessIdIndexRoute
+}
+
+const OrbyteBusinessIdRouteChildren: OrbyteBusinessIdRouteChildren = {
+  OrbyteBusinessIdConnectRoute: OrbyteBusinessIdConnectRoute,
+  OrbyteBusinessIdEsignRoute: OrbyteBusinessIdEsignRoute,
+  OrbyteBusinessIdInboxRoute: OrbyteBusinessIdInboxRoute,
+  OrbyteBusinessIdPeopleRoute: OrbyteBusinessIdPeopleRoute,
+  OrbyteBusinessIdProductsRoute: OrbyteBusinessIdProductsRoute,
+  OrbyteBusinessIdQuotesRoute: OrbyteBusinessIdQuotesRoute,
+  OrbyteBusinessIdWorkRoute: OrbyteBusinessIdWorkRoute,
+  OrbyteBusinessIdIndexRoute: OrbyteBusinessIdIndexRoute,
+}
+
+const OrbyteBusinessIdRouteWithChildren =
+  OrbyteBusinessIdRoute._addFileChildren(OrbyteBusinessIdRouteChildren)
+
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
+  WhatsappRoute: WhatsappRoute,
   ApiSplatRoute: ApiSplatRoute,
-  QuotesQuoteIdRoute: QuotesQuoteIdRoute,
+  OrbyteBusinessIdRoute: OrbyteBusinessIdRouteWithChildren,
+  SignQuoteIdRoute: SignQuoteIdRoute,
+  OrbyteIndexRoute: OrbyteIndexRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

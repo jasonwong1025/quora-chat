@@ -111,3 +111,75 @@
     @apply bg-background text-foreground antialiased;
   }
 }
+
+/* Theme scopes live in the base layer so utility classes can override them. */
+@layer base {
+/* ---------- WhatsApp portal (simulated, dark) ---------- */
+
+.wa {
+  --wa-app: #161717;
+  --wa-panel: #1d1f1f;
+  --wa-hover: #2e2f2f;
+  --wa-input: #2e2f2f;
+  --wa-border: #2a2c2c;
+  --wa-in: #242626;
+  --wa-out: #144d37;
+  --wa-green: #21c063;
+  --wa-text: #fafafa;
+  --wa-muted: #a5a5a5;
+  --wa-tick-read: #53bdeb;
+  background: var(--wa-app);
+  color: var(--wa-text);
+  font-family: "Segoe UI", "Helvetica Neue", Helvetica, Arial, sans-serif;
+  color-scheme: dark;
+}
+
+/* Our own doodle pattern (not WhatsApp's artwork). */
+.wa-doodle {
+  background-color: var(--wa-app);
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='180' fill='none' stroke='%23ffffff' stroke-opacity='0.045' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M20 30h26a6 6 0 0 1 6 6v14a6 6 0 0 1-6 6H32l-8 7v-7h-4a6 6 0 0 1-6-6V36a6 6 0 0 1 6-6z'/%3E%3Ccircle cx='120' cy='34' r='12'/%3E%3Cpath d='M114 34h12M120 28v12'/%3E%3Cpath d='M150 90l6 12 13 2-9 9 2 13-12-6-12 6 2-13-9-9 13-2z'/%3E%3Cpath d='M40 120c0-8 12-8 12 0 0-8 12-8 12 0 0 8-12 16-12 16s-12-8-12-16z'/%3E%3Crect x='86' y='120' width='26' height='34' rx='3'/%3E%3Cpath d='M92 130h14M92 137h14M92 144h8'/%3E%3Cpath d='M70 70a10 10 0 1 0 20 0 10 10 0 1 0-20 0M76 68h.01M84 68h.01M75 74a6 6 0 0 0 10 0'/%3E%3Cpath d='M12 160l12-12 8 8 14-14'/%3E%3Cpath d='M150 160h18M159 151v18'/%3E%3C/svg%3E");
+}
+
+.wa-typing span {
+  animation: wa-blink 1.2s infinite both;
+}
+.wa-typing span:nth-child(2) { animation-delay: 0.2s; }
+.wa-typing span:nth-child(3) { animation-delay: 0.4s; }
+@keyframes wa-blink {
+  0%, 80%, 100% { opacity: 0.3; }
+  40% { opacity: 1; }
+}
+
+/* ---------- Orbyte workspace ---------- */
+
+.orbyte {
+  --orb-navy: #0b1e4d;
+  --orb-royal: #0050fe;
+  --orb-sky: #00b4fe;
+  --orb-cyan: #06dfda;
+  --orb-gray: #f3f6fc;
+  --orb-line: #dce4f5;
+  --orb-gradient: linear-gradient(100deg, #0b1e4d 0%, #0050fe 45%, #00b4fe 75%, #06dfda 100%);
+  --background: #f3f6fc;
+  --foreground: #0b1e4d;
+  --card: #ffffff;
+  --card-foreground: #0b1e4d;
+  --popover: #ffffff;
+  --popover-foreground: #0b1e4d;
+  --primary: #0050fe;
+  --primary-foreground: #ffffff;
+  --secondary: #e9effb;
+  --secondary-foreground: #0b1e4d;
+  --muted: #eef2fa;
+  --muted-foreground: #5b6b8c;
+  --accent: #e9effb;
+  --accent-foreground: #0b1e4d;
+  --border: #dce4f5;
+  --input: #dce4f5;
+  --ring: #00b4fe;
+  --radius: 0.75rem;
+  --status-draft: #0050fe;
+  background: var(--background);
+  color: var(--foreground);
+}
+}

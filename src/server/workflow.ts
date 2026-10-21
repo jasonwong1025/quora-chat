@@ -14,6 +14,7 @@ export type WorkflowStep =
 	| { step: "parsed"; summary: string; language: string; itemCount: number }
 	| { step: "priced"; outcome: Outcome; flags: Flag[]; requestId: string }
 	| { step: "replied"; body: string }
+	| { step: "held"; staffName: string | null }
 	| { step: "failed"; error: string };
 
 async function loadCatalog(businessId: string) {
@@ -90,6 +91,24 @@ export async function* handleCustomerMessage(input: {
 		payload: { body: input.body },
 	});
 	yield { step: "received" };
+
+	// A staff member has taken over: keep the AI quiet and leave it to them.
+	if (conversation.aiPaused) {
+		const handler = conversation.handledBy
+			? await db.query.staff.findFirst({
+					where: eq(schema.staff.id, conversation.handledBy),
+				})
+			: undefined;
+		await emitOrbyteEvent(db, {
+			businessId,
+			requestId: open?.id,
+			type: "chat.message_held",
+			actor: "quora-chat",
+			summary: `AI paused — message left for ${handler?.name ?? "staff"}`,
+		});
+		yield { step: "held", staffName: handler?.name ?? null };
+		return;
+	}
 
 	const { business, products, rules } = await loadCatalog(businessId);
 
@@ -396,15 +415,11 @@ export async function decideQuote(input: {
 	});
 
 	if (input.decision === "approved") {
-		const lines = quote.lineItems
-			.map(
-				(l) => `• ${l.description} × ${l.quantity} — ${formatMYR(l.amountSen)}`,
-			)
-			.join("\n");
-		const body = `Quotation ${quote.number}\n${lines}\nSubtotal ${formatMYR(quote.subtotalSen)}\nSST ${formatMYR(quote.sstSen)}\nTotal ${formatMYR(quote.totalSen)}\nValid until ${quote.validUntil.toLocaleDateString("en-MY")}`;
+		const body = `Quotation ${quote.number}\nTotal ${formatMYR(quote.totalSen)} (incl. SST)\nValid until ${quote.validUntil.toLocaleDateString("en-MY")}\n\nPlease review and sign to confirm.`;
 		await db.insert(schema.messages).values({
 			conversationId: request.conversationId,
 			sender: "staff",
+			authorName: member.name,
 			body,
 			quoteId: quote.id,
 		});
@@ -413,8 +428,183 @@ export async function decideQuote(input: {
 			requestId: request.id,
 			type: "quote.sent_to_customer",
 			actor: "quora-chat",
-			summary: `${quote.number} sent to customer`,
+			summary: `${quote.number} sent to customer on WhatsApp`,
+		});
+		await emitOrbyteEvent(db, {
+			businessId: quote.businessId,
+			requestId: request.id,
+			type: "esign.sent",
+			actor: "eSign",
+			summary: `${quote.number} sent for customer signature`,
 		});
 	}
+	return row;
+}
+
+// --- Chat takeover -------------------------------------------------------------
+
+async function loadConversation(conversationId: string) {
+	const conversation = await getDb().query.conversations.findFirst({
+		where: eq(schema.conversations.id, conversationId),
+	});
+	if (!conversation) throw new Error("Conversation not found");
+	return conversation;
+}
+
+export async function setTakeover(input: {
+	conversationId: string;
+	staffId: string;
+	takeOver: boolean;
+}) {
+	const db = getDb();
+	const conversation = await loadConversation(input.conversationId);
+	const member = await loadStaff(input.staffId, conversation.businessId);
+	const [row] = await db
+		.update(schema.conversations)
+		.set({
+			aiPaused: input.takeOver,
+			handledBy: input.takeOver ? member.id : null,
+		})
+		.where(eq(schema.conversations.id, conversation.id))
+		.returning();
+	const open = await findOpenRequest(conversation.id);
+	await emitOrbyteEvent(db, {
+		businessId: conversation.businessId,
+		requestId: open?.id,
+		type: input.takeOver ? "chat.taken_over" : "chat.handed_back",
+		actor: member.name,
+		summary: input.takeOver
+			? `${member.name} took over the chat with ${conversation.customerName}`
+			: `${member.name} handed ${conversation.customerName} back to the AI`,
+	});
+	return row;
+}
+
+/** A staff reply. Replying takes over the chat so the AI does not talk over staff. */
+export async function staffReply(input: {
+	conversationId: string;
+	staffId: string;
+	body: string;
+}) {
+	const db = getDb();
+	const conversation = await loadConversation(input.conversationId);
+	const member = await loadStaff(input.staffId, conversation.businessId);
+	if (!conversation.aiPaused || conversation.handledBy !== member.id) {
+		await setTakeover({ ...input, takeOver: true });
+	}
+	const [row] = await db
+		.insert(schema.messages)
+		.values({
+			conversationId: conversation.id,
+			sender: "staff",
+			authorName: member.name,
+			body: input.body,
+		})
+		.returning();
+	const open = await findOpenRequest(conversation.id);
+	await emitOrbyteEvent(db, {
+		businessId: conversation.businessId,
+		requestId: open?.id,
+		type: "chat.staff_replied",
+		actor: member.name,
+		summary: `${member.name} replied to ${conversation.customerName}`,
+		payload: { body: input.body },
+	});
+	return row;
+}
+
+// --- eSign ---------------------------------------------------------------------
+
+const signedThanks: Record<
+	ExtractedRequest["language"],
+	(n: string) => string
+> = {
+	en: (n) =>
+		`Thank you! We've received your signed quotation ${n}. Our team will contact you shortly to arrange the next step.`,
+	ms: (n) =>
+		`Terima kasih! Kami telah menerima sebut harga ${n} yang telah ditandatangani. Pasukan kami akan menghubungi anda tidak lama lagi.`,
+	zh: (n) =>
+		`谢谢！我们已收到您签署的报价单 ${n}，我们的团队会尽快联系您安排下一步。`,
+	mixed: (n) =>
+		`Thank you! We've received your signed quotation ${n}. Our team will contact you shortly to arrange the next step.`,
+};
+
+async function loadSignableQuote(quoteId: string) {
+	const db = getDb();
+	const quote = await db.query.quotes.findFirst({
+		where: eq(schema.quotes.id, quoteId),
+	});
+	if (!quote) throw new Error("Quote not found");
+	const request = await db.query.quoteRequests.findFirst({
+		where: eq(schema.quoteRequests.id, quote.requestId),
+	});
+	if (!request) throw new Error("Request not found");
+	return { quote, request };
+}
+
+export async function markQuoteViewed(quoteId: string) {
+	const db = getDb();
+	const { quote, request } = await loadSignableQuote(quoteId);
+	if (quote.viewedAt || quote.status !== "approved") return quote;
+	const [row] = await db
+		.update(schema.quotes)
+		.set({ viewedAt: new Date() })
+		.where(eq(schema.quotes.id, quote.id))
+		.returning();
+	await emitOrbyteEvent(db, {
+		businessId: quote.businessId,
+		requestId: request.id,
+		type: "esign.viewed",
+		actor: "eSign",
+		summary: `Customer opened ${quote.number} for signing`,
+	});
+	return row;
+}
+
+export async function signQuote(input: {
+	quoteId: string;
+	signerName: string;
+	signatureImage: string;
+}) {
+	const db = getDb();
+	const { quote, request } = await loadSignableQuote(input.quoteId);
+	if (quote.status === "accepted") throw new Error("Already signed");
+	if (quote.status !== "approved")
+		throw new Error("This quotation is not open for signing");
+	if (quote.validUntil < new Date())
+		throw new Error("This quotation has expired");
+
+	const now = new Date();
+	const [row] = await db
+		.update(schema.quotes)
+		.set({
+			status: "accepted",
+			signedAt: now,
+			signerName: input.signerName,
+			signatureImage: input.signatureImage,
+			viewedAt: quote.viewedAt ?? now,
+		})
+		.where(eq(schema.quotes.id, quote.id))
+		.returning();
+
+	await emitOrbyteEvent(db, {
+		businessId: quote.businessId,
+		requestId: request.id,
+		type: "esign.signed",
+		actor: input.signerName,
+		summary: `${input.signerName} signed ${quote.number}`,
+	});
+	await emitOrbyteEvent(db, {
+		businessId: quote.businessId,
+		requestId: request.id,
+		type: "quote.accepted",
+		actor: input.signerName,
+		summary: `${quote.number} accepted (${formatMYR(quote.totalSen)})`,
+	});
+	await db.insert(schema.messages).values({
+		conversationId: request.conversationId,
+		sender: "assistant",
+		body: signedThanks[request.extracted.language](quote.number),
+	});
 	return row;
 }

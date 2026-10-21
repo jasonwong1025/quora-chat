@@ -17,7 +17,17 @@ export type OrbyteEventType =
 	| "quote.approved"
 	| "quote.rejected"
 	| "quote.sent_to_customer"
-	| "quote.processing_failed";
+	| "quote.processing_failed"
+	| "quote.accepted"
+	| "chat.taken_over"
+	| "chat.handed_back"
+	| "chat.staff_replied"
+	| "chat.message_held"
+	| "esign.sent"
+	| "esign.viewed"
+	| "esign.signed"
+	| "product.created"
+	| "product.updated";
 
 export async function emitOrbyteEvent(
 	db: Db,

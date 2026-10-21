@@ -10,8 +10,20 @@ Customers send messages in English, Bahasa Melayu, Chinese, or a mix. Quora Chat
    - **Draft quotation**: everything matched and was priced.
    - **Ask for clarification**: details are missing.
    - **Flag for human review**: pricing is uncertain or the job needs a site assessment.
-4. An authorised staff member reviews, edits, and approves the draft. The quote is then sent back into the chat and can be downloaded as a PDF.
-5. Every step is recorded as a **simulated Orbyte activity event**.
+4. An authorised staff member reviews, edits, and approves the draft in Orbyte. The quote goes back to the customer on WhatsApp as a PDF with a **Review & sign** link.
+5. The customer signs online (**Orbyte eSign**), which marks the quote accepted.
+6. Staff can **take over** any chat. The AI pauses until they hand it back.
+7. Every step is recorded as a **simulated Orbyte activity event**.
+
+## Two sides of the demo
+
+| URL | Who you are | What it is |
+| --- | --- | --- |
+| `/whatsapp` | The customer | A simulated WhatsApp Web. Chats are the 3 businesses. Switch customer from the top-left menu. |
+| `/orbyte` | The business | An Orbyte workspace: Home, People, Work, eSign, Connect, plus the new **Products** and **Quotation** (Inbox, Quotes) modules. Switch company and signed-in user from the sidebar. |
+| `/sign/:quoteId` | The customer | The eSign page linked from WhatsApp. |
+
+Open `/whatsapp` and `/orbyte` in two tabs side by side. People, Work and Connect show sample data only (`src/data/orbyte-static.ts`); everything else uses the database.
 
 > All businesses, people, prices and messages are **synthetic, team-created demo data**. SST rates are illustrative.
 
@@ -44,7 +56,7 @@ Set `OPENROUTER_API_KEY` (from https://openrouter.ai/keys). `AI_MODEL` takes an 
 | SejukMax Aircon Services | Aircon servicing | per-unit tiers, ceiling-cassette surcharge, repairs needing diagnosis |
 | Rumah Rapi Renovation | Renovation & handyman | site-visit flags (tiling, large rooms), paint-supply surcharge |
 
-Each business has sample customer messages in the chat panel to start a demo quickly.
+Each business has sample customer messages. Open an empty WhatsApp chat to tap one.
 
 ## Project layout
 
@@ -60,8 +72,13 @@ src/
     hono.ts             /api app: oRPC handler, quote PDF, health
     quote-pdf.tsx       PDF layout
   orpc/                 oRPC router and isomorphic client
-  routes/               /, /quotes/$quoteId, /api/$
-  components/           customer chat, reviewer panel, quote editor, activity feed
+  data/orbyte-static.ts sample data for People / Work / Connect
+  routes/               / (landing), /whatsapp, /sign/$quoteId, /orbyte/$businessId/*, /api/$
+  components/
+    whatsapp/           WhatsApp Web lookalike (chat list, chat window)
+    orbyte/             workspace context, request detail, page helpers
+    quote-editor.tsx    edit / approve drafts
+    quote-document.tsx  web view of a quotation
 ```
 
 ## Scripts
