@@ -9,6 +9,7 @@ import type {
 	PricingRuleConfig,
 	RequiredField,
 } from "#/db/schema";
+import { formatMYR } from "#/lib/money";
 
 export type CatalogProduct = {
 	id: string;
@@ -29,6 +30,8 @@ export type PricingResult = {
 	outcome: Outcome;
 	flags: Flag[];
 	lineItems: LineItem[];
+	/** How each priced line was worked out, in plain words. */
+	explain: { itemIndex: number; lines: string[] }[];
 };
 
 function rulesFor(rules: CatalogRule[], productId: string) {
@@ -50,6 +53,7 @@ export function priceRequest(
 	const byId = new Map(products.map((p) => [p.id, p]));
 	const flags: Flag[] = [];
 	const lineItems: LineItem[] = [];
+	const explain: PricingResult["explain"] = [];
 
 	if (request.items.length === 0) {
 		flags.push({
@@ -137,12 +141,20 @@ export function priceRequest(
 
 		// Base unit price: the highest tier the quantity reaches.
 		let unitPriceSen = product.unitPriceSen;
+		const log = [
+			`${product.name}: catalog price ${formatMYR(product.unitPriceSen)}/${product.unit}`,
+		];
 		const tierRule = applicable.find((r) => r.config.kind === "tier");
 		if (tierRule?.config.kind === "tier") {
 			const tier = [...tierRule.config.tiers]
 				.sort((a, b) => b.minQty - a.minQty)
 				.find((t) => qty >= t.minQty);
-			if (tier) unitPriceSen = tier.unitPriceSen;
+			if (tier) {
+				unitPriceSen = tier.unitPriceSen;
+				log.push(
+					`Quantity ${qty} reaches the ${tier.minQty}+ tier → ${formatMYR(tier.unitPriceSen)}/${product.unit}`,
+				);
+			}
 		}
 
 		const notes: string[] = [];
@@ -153,9 +165,21 @@ export function priceRequest(
 			if (config.perUnitSen) unitPriceSen += config.perUnitSen;
 			if (config.amountSen) flatSen += config.amountSen;
 			notes.push(config.label);
+			log.push(
+				`${config.label}: ${config.when.field} is "${config.when.equals}" → ${[
+					config.perUnitSen &&
+						`+${formatMYR(config.perUnitSen)}/${product.unit}`,
+					config.amountSen && `+${formatMYR(config.amountSen)} flat`,
+				]
+					.filter(Boolean)
+					.join(", ")}`,
+			);
 		}
 
 		let amountSen = unitPriceSen * qty + flatSen;
+		log.push(
+			`${qty} × ${formatMYR(unitPriceSen)}${flatSen ? ` + ${formatMYR(flatSen)}` : ""} = ${formatMYR(amountSen)}`,
+		);
 		const minRule = applicable.find((r) => r.config.kind === "minimum_charge");
 		if (
 			minRule?.config.kind === "minimum_charge" &&
@@ -163,8 +187,13 @@ export function priceRequest(
 		) {
 			amountSen = minRule.config.minSen;
 			notes.push("Minimum charge applied");
+			log.push(`Below the minimum charge → ${formatMYR(amountSen)}`);
 		}
-		if (assessment) notes.push("Price to be confirmed after assessment");
+		if (assessment) {
+			notes.push("Price to be confirmed after assessment");
+			log.push(`Needs assessment: ${assessment}`);
+		}
+		explain.push({ itemIndex, lines: log });
 
 		const details = Object.values(item.fields).filter(Boolean).join(", ");
 		lineItems.push({
@@ -185,7 +214,7 @@ export function priceRequest(
 			? "needs_review"
 			: "draft_ready";
 
-	return { outcome, flags, lineItems };
+	return { outcome, flags, lineItems, explain };
 }
 
 export function totals(
@@ -200,4 +229,4 @@ export function totals(
 	return { subtotalSen, sstSen, totalSen: subtotalSen + sstSen };
 }
 
-export { formatMYR } from "#/lib/money";
+export { formatMYR };

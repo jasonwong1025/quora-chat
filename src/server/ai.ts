@@ -23,6 +23,7 @@ function getClient() {
 // OpenRouter model ids are "provider/model". The model must support
 // structured outputs (json_schema), which extraction relies on.
 const model = () => process.env.AI_MODEL || "openai/gpt-5-mini";
+export const aiModelName = model;
 
 // --- Extraction -------------------------------------------------------------
 
@@ -39,15 +40,24 @@ const extractionSchema = z.object({
 			rawText: z.string(),
 			quantity: z.number().nullable(),
 			fields: z.array(z.object({ key: z.string(), value: z.string() })),
+			reason: z.string(),
 		}),
 	),
+	reasoning: z.array(z.string()),
 });
 
 // Hand-written so it satisfies OpenAI strict mode (no open-ended objects).
 const extractionJsonSchema = {
 	type: "object",
 	additionalProperties: false,
-	required: ["language", "summary", "location", "neededBy", "items"],
+	required: [
+		"language",
+		"summary",
+		"location",
+		"neededBy",
+		"items",
+		"reasoning",
+	],
 	properties: {
 		language: { type: "string", enum: ["en", "ms", "zh", "mixed"] },
 		summary: { type: "string" },
@@ -65,6 +75,7 @@ const extractionJsonSchema = {
 					"rawText",
 					"quantity",
 					"fields",
+					"reason",
 				],
 				properties: {
 					match: { type: "string", enum: ["exact", "ambiguous", "none"] },
@@ -84,9 +95,11 @@ const extractionJsonSchema = {
 							},
 						},
 					},
+					reason: { type: "string" },
 				},
 			},
 		},
+		reasoning: { type: "array", items: { type: "string" } },
 	},
 } as const;
 
@@ -126,6 +139,8 @@ Rules:
 - language: the language of the customer's messages ("mixed" if they mix).
 - summary: one short English sentence describing the request.
 - location / neededBy: as stated by the customer, else null.
+- reason (per item): one short English sentence on why you chose this match, quoting the customer's words (e.g. "Said 'flyer A5 1000pcs', matches the A5 flyer exactly").
+- reasoning: 2-5 short English notes, shown to the business's staff, on how you read the conversation: what the customer wants, how you handled other languages or slang, any corrections in later messages, and anything you were unsure about. Facts only, no prices.
 - Never invent prices.`;
 
 	const transcript = input.history

@@ -103,7 +103,11 @@ const getConversation = os
 					.from(schema.quotes)
 					.where(inArray(schema.quotes.id, quoteIds))
 			: [];
-		return { ...conversation, messages, quotes };
+		const runs = await db.query.aiRuns.findMany({
+			where: eq(schema.aiRuns.conversationId, conversation.id),
+			orderBy: asc(schema.aiRuns.createdAt),
+		});
+		return { ...conversation, messages, quotes, runs };
 	});
 
 /** Streams workflow progress so the UI can show each step as it happens. */

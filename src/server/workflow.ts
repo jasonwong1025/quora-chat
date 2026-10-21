@@ -4,8 +4,13 @@
  */
 import { and, asc, count, desc, eq, inArray } from "drizzle-orm";
 import { getDb, schema } from "#/db";
-import type { ExtractedRequest, Flag, LineItem } from "#/db/schema";
-import { composeReply, extractRequest } from "./ai";
+import type {
+	ExtractedRequest,
+	Flag,
+	LineItem,
+	ThoughtStep,
+} from "#/db/schema";
+import { aiModelName, composeReply, extractRequest } from "./ai";
 import { emitOrbyteEvent } from "./orbyte";
 import { formatMYR, type Outcome, priceRequest, totals } from "./pricing";
 
@@ -50,6 +55,63 @@ async function nextQuoteNumber(businessId: string, prefix: string) {
 	return `${prefix}-Q-${String(n + 1).padStart(4, "0")}`;
 }
 
+const languageLabel: Record<ExtractedRequest["language"], string> = {
+	en: "English",
+	ms: "Bahasa Melayu",
+	zh: "Chinese",
+	mixed: "a mix of languages",
+};
+
+const outcomeLabel = {
+	needs_clarification: "Ask the customer for the missing details",
+	needs_review: "Flag for staff review before quoting",
+	draft_ready: "Draft is ready for staff approval",
+} as const;
+
+/** Records the AI's thinking for one turn, step by step, so staff can follow it live. */
+async function startRun(conversationId: string, messageId: string) {
+	const db = getDb();
+	const steps: ThoughtStep[] = [];
+	const [run] = await db
+		.insert(schema.aiRuns)
+		.values({ conversationId, messageId, model: aiModelName() })
+		.returning();
+	const save = (patch: Partial<typeof schema.aiRuns.$inferInsert> = {}) =>
+		db
+			.update(schema.aiRuns)
+			.set({ steps: [...steps], ...patch })
+			.where(eq(schema.aiRuns.id, run.id));
+	return {
+		add(step: Omit<ThoughtStep, "at">) {
+			steps.push({ ...step, at: new Date().toISOString() });
+			return save();
+		},
+		setRequest(requestId: string) {
+			return save({ requestId });
+		},
+		finish(status: "done" | "held" | "failed") {
+			return save({ status, finishedAt: new Date() });
+		},
+	};
+}
+
+function describeItem(
+	item: ExtractedRequest["items"][number],
+	names: Map<string, string>,
+) {
+	const target =
+		item.match === "exact" && item.productId
+			? `${names.get(item.productId) ?? item.productId} (exact match)`
+			: item.match === "ambiguous"
+				? `could be ${item.candidateProductIds.map((id) => names.get(id) ?? id).join(" or ")}`
+				: "not in the catalog";
+	const facts = [
+		item.quantity !== null ? `qty ${item.quantity}` : "no quantity yet",
+		...Object.entries(item.fields).map(([k, v]) => `${k}: ${v}`),
+	].join(", ");
+	return `"${item.rawText}" → ${target} · ${facts}${item.reason ? ` — ${item.reason}` : ""}`;
+}
+
 /** Open = still being worked on (not approved or rejected). */
 async function findOpenRequest(conversationId: string) {
 	return getDb().query.quoteRequests.findFirst({
@@ -76,11 +138,15 @@ export async function* handleCustomerMessage(input: {
 	if (!conversation) throw new Error("Conversation not found");
 	const { businessId } = conversation;
 
-	await db.insert(schema.messages).values({
-		conversationId: conversation.id,
-		sender: "customer",
-		body: input.body,
-	});
+	const [incoming] = await db
+		.insert(schema.messages)
+		.values({
+			conversationId: conversation.id,
+			sender: "customer",
+			body: input.body,
+		})
+		.returning();
+	const run = await startRun(conversation.id, incoming.id);
 	const open = await findOpenRequest(conversation.id);
 	await emitOrbyteEvent(db, {
 		businessId,
@@ -106,6 +172,12 @@ export async function* handleCustomerMessage(input: {
 			actor: "quora-chat",
 			summary: `AI paused — message left for ${handler?.name ?? "staff"}`,
 		});
+		await run.add({
+			kind: "held",
+			title: `Stayed quiet — ${handler?.name ?? "staff"} is handling this chat`,
+			detail: ["The AI is paused until staff hand the chat back."],
+		});
+		await run.finish("held");
 		yield { step: "held", staffName: handler?.name ?? null };
 		return;
 	}
@@ -126,6 +198,17 @@ export async function* handleCustomerMessage(input: {
 			orderBy: asc(schema.messages.createdAt),
 		})
 	).filter((m) => !lastClosed || m.createdAt > lastClosed.updatedAt);
+	const customerTurns = history.filter((m) => m.sender === "customer").length;
+	await run.add({
+		kind: "read",
+		title:
+			customerTurns > 1
+				? `Read the conversation (${customerTurns} customer messages in this request)`
+				: "Read the new message",
+		detail: [
+			`Checked against ${products.length} products and ${rules.length} pricing rules from ${business.name}`,
+		],
+	});
 
 	let extracted: ExtractedRequest;
 	try {
@@ -165,6 +248,13 @@ export async function* handleCustomerMessage(input: {
 			summary: "AI could not read the message; flagged for staff",
 			payload: { error: message },
 		});
+		await run.setRequest(request.id);
+		await run.add({
+			kind: "error",
+			title: "Could not read the message — handed to staff",
+			detail: [message],
+		});
+		await run.finish("failed");
 		yield { step: "failed", error: message };
 		return;
 	}
@@ -176,6 +266,26 @@ export async function* handleCustomerMessage(input: {
 		itemCount: extracted.items.length,
 	};
 
+	const names = new Map(products.map((p) => [p.id, p.name]));
+	await run.add({
+		kind: "understand",
+		title: extracted.summary,
+		detail: [
+			`Customer is writing in ${languageLabel[extracted.language]}`,
+			...(extracted.location ? [`Location: ${extracted.location}`] : []),
+			...(extracted.neededBy ? [`Needed by: ${extracted.neededBy}`] : []),
+			...(extracted.reasoning ?? []),
+		],
+	});
+	await run.add({
+		kind: "match",
+		title:
+			extracted.items.length === 0
+				? "No products mentioned yet"
+				: `Matched ${extracted.items.length} item${extracted.items.length === 1 ? "" : "s"} to the catalog`,
+		detail: extracted.items.map((i) => describeItem(i, names)),
+	});
+
 	const result = priceRequest(extracted, products, rules);
 	const request = await upsertRequest(open?.id, {
 		businessId,
@@ -183,6 +293,47 @@ export async function* handleCustomerMessage(input: {
 		status: result.outcome,
 		extracted,
 		flags: result.flags,
+	});
+	await run.setRequest(request.id);
+
+	const missing = result.flags.filter((f) => f.kind === "missing_info");
+	await run.add({
+		kind: "check",
+		title: missing.length
+			? `${missing.length} detail${missing.length === 1 ? "" : "s"} missing before it can be priced`
+			: "All required details are there",
+		detail: missing.map(
+			(f) =>
+				`${f.message}${f.options?.length ? ` (${f.options.join(" / ")})` : ""}`,
+		),
+	});
+	if (result.lineItems.length) {
+		const t = totals(
+			result.lineItems,
+			business.sstRateBps,
+			business.sstRegistered,
+		);
+		await run.add({
+			kind: "price",
+			title: `Priced from the catalog and rules: ${formatMYR(t.totalSen)} incl. SST`,
+			detail: [
+				...result.explain.flatMap((e) => e.lines),
+				business.sstRegistered
+					? `SST ${business.sstRateBps / 100}% = ${formatMYR(t.sstSen)}`
+					: "Not SST registered — no SST",
+				"Prices come from the pricing engine, not the AI.",
+			],
+		});
+	}
+	await run.add({
+		kind: "decide",
+		title: outcomeLabel[result.outcome],
+		detail:
+			result.outcome === "draft_ready"
+				? ["Nothing is sent to the customer until staff approve the quote."]
+				: result.flags
+						.filter((f) => f.kind !== "missing_info")
+						.map((f) => f.message),
 	});
 	await emitOrbyteEvent(db, {
 		businessId,
@@ -243,6 +394,16 @@ export async function* handleCustomerMessage(input: {
 		sender: "assistant",
 		body: reply,
 	});
+	await run.add({
+		kind: "reply",
+		title: `Replied in ${languageLabel[extracted.language]}`,
+		detail: [
+			result.outcome === "needs_clarification"
+				? "Asked only for the missing details, without mentioning prices"
+				: "Told the customer the team will confirm, without mentioning prices",
+		],
+	});
+	await run.finish("done");
 	yield { step: "replied", body: reply };
 }
 

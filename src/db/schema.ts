@@ -148,6 +148,8 @@ export type ExtractedItem = {
 	rawText: string;
 	quantity: number | null;
 	fields: Record<string, string>;
+	/** The AI's one-line explanation of this match. */
+	reason?: string;
 };
 
 export type ExtractedRequest = {
@@ -156,6 +158,8 @@ export type ExtractedRequest = {
 	items: ExtractedItem[];
 	location: string | null;
 	neededBy: string | null;
+	/** Short notes from the AI on how it read the conversation. */
+	reasoning?: string[];
 };
 
 export type Flag = {
@@ -238,4 +242,43 @@ export const activityEvents = pgTable("activity_events", {
 	summary: text("summary").notNull(),
 	payload: jsonb("payload").$type<Record<string, unknown>>(),
 	createdAt: createdAt(),
+});
+
+/** One step of the AI's thinking, shown to staff in the inbox. */
+export type ThoughtStep = {
+	kind:
+		| "read"
+		| "understand"
+		| "match"
+		| "check"
+		| "price"
+		| "decide"
+		| "reply"
+		| "held"
+		| "error";
+	title: string;
+	detail?: string[];
+	at: string; // ISO time
+};
+
+export const aiRunStatus = pgEnum("ai_run_status", [
+	"running",
+	"done",
+	"held",
+	"failed",
+]);
+
+/** One AI turn: what it read, matched, priced and decided, step by step. */
+export const aiRuns = pgTable("ai_runs", {
+	id: id(),
+	conversationId: text("conversation_id")
+		.notNull()
+		.references(() => conversations.id, { onDelete: "cascade" }),
+	requestId: text("request_id"),
+	messageId: text("message_id").notNull(), // the customer message that started it
+	status: aiRunStatus("status").default("running").notNull(),
+	model: text("model"),
+	steps: jsonb("steps").$type<ThoughtStep[]>().default([]).notNull(),
+	createdAt: createdAt(),
+	finishedAt: timestamp("finished_at", { withTimezone: true }),
 });

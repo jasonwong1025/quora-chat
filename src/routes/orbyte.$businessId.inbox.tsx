@@ -12,6 +12,7 @@ import {
 import { Fragment, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { z } from "zod";
+import { AiThinking } from "#/components/orbyte/ai-thinking";
 import { RequestDetail } from "#/components/orbyte/request-detail";
 import { useWorkspace } from "#/components/orbyte/workspace";
 import { StatusBadge } from "#/components/status-badge";
@@ -191,6 +192,8 @@ function Conversation({ row, onBack }: { row: InboxRow; onBack: () => void }) {
 	);
 
 	const messages = conversation.data?.messages ?? [];
+	const runs = conversation.data?.runs ?? [];
+	const latestRunId = runs.at(-1)?.id;
 	const bottomRef = useRef<HTMLDivElement>(null);
 	// biome-ignore lint/correctness/useExhaustiveDependencies: scroll when new messages arrive
 	useEffect(() => {
@@ -199,7 +202,11 @@ function Conversation({ row, onBack }: { row: InboxRow; onBack: () => void }) {
 
 	const mine = row.aiPaused && row.handledBy === me?.id;
 	// The customer spoke last and the AI is still on: it is working on a reply.
-	const aiWorking = row.awaitingReply && !row.aiPaused;
+	// (The thinking card shows this itself once its run has started.)
+	const aiWorking =
+		row.awaitingReply &&
+		!row.aiPaused &&
+		!runs.some((r) => r.status === "running");
 
 	async function toggle(takeOver: boolean) {
 		if (!me) return toast.error("Choose who you are signed in as first");
@@ -311,6 +318,15 @@ function Conversation({ row, onBack }: { row: InboxRow; onBack: () => void }) {
 										{clock(m.createdAt)}
 									</p>
 								</div>
+								{runs
+									.filter((r) => r.messageId === m.id)
+									.map((r) => (
+										<AiThinking
+											key={r.id}
+											run={r}
+											defaultOpen={r.id === latestRunId}
+										/>
+									))}
 							</Fragment>
 						);
 					})}
