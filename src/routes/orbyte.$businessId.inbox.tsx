@@ -245,7 +245,7 @@ function Conversation({ row, onBack }: { row: InboxRow; onBack: () => void }) {
 			)}
 		>
 			<div className="min-h-0 flex-1 overflow-y-auto px-4 py-4 sm:px-8">
-				<div className="mx-auto flex max-w-3xl flex-col gap-1.5">
+				<div className="flex flex-col gap-1.5">
 					{messages.map((m, i) => {
 						const prev = messages[i - 1];
 						const newDay =

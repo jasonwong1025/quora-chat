@@ -45,7 +45,7 @@ function Esign() {
 	const signed = docs.data?.filter((x) => x.status === "accepted").length ?? 0;
 
 	return (
-		<div className="mx-auto max-w-6xl p-4 sm:p-8">
+		<div className="p-4 sm:p-6">
 			<PageHeader
 				title="eSign"
 				description={`Documents sent for signature. ${signed} of ${docs.data?.length ?? 0} signed.`}

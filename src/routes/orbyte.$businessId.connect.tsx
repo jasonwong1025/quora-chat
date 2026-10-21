@@ -11,7 +11,7 @@ export const Route = createFileRoute("/orbyte/$businessId/connect")({
 
 function Connect() {
 	return (
-		<div className="mx-auto max-w-6xl p-4 sm:p-8">
+		<div className="p-4 sm:p-6">
 			<PageHeader
 				title="Connect"
 				description="Link Orbyte to the tools and channels your business already uses."

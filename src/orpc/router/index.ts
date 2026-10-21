@@ -1,8 +1,19 @@
 import { ORPCError, os } from "@orpc/server";
-import { and, asc, desc, eq, inArray, like } from "drizzle-orm";
+import {
+	and,
+	asc,
+	desc,
+	eq,
+	getTableColumns,
+	inArray,
+	like,
+	ne,
+	sql,
+} from "drizzle-orm";
 import { z } from "zod";
 import { getDemoBusiness } from "#/data/demo";
 import { getDb, schema } from "#/db";
+import { suggestSku, uniqueSku } from "#/lib/sku";
 import { emitOrbyteEvent } from "#/server/orbyte";
 import {
 	decideQuote,
@@ -34,11 +45,17 @@ const getBusiness = os.input(businessInput).handler(async ({ input }) => {
 		where: eq(schema.businesses.id, input.businessId),
 	});
 	if (!business) throw new ORPCError("NOT_FOUND");
+	const { image, ...productColumns } = getTableColumns(schema.products);
 	const [products, rules, staff] = await Promise.all([
 		db
-			.select()
+			.select({
+				...productColumns,
+				// Short hash so the image URL changes when the picture does.
+				imageVersion: sql<string | null>`left(md5(${image}), 8)`,
+			})
 			.from(schema.products)
-			.where(eq(schema.products.businessId, business.id)),
+			.where(eq(schema.products.businessId, business.id))
+			.orderBy(asc(schema.products.category), asc(schema.products.name)),
 		db
 			.select()
 			.from(schema.pricingRules)
@@ -379,6 +396,8 @@ const requiredFieldSchema = z.object({
 });
 
 const productInput = z.object({
+	sku: z.string().trim().max(40),
+	type: z.enum(["stock", "service"]),
 	category: z.string().min(1),
 	name: z.string().min(1),
 	description: z.string(),
@@ -387,6 +406,124 @@ const productInput = z.object({
 	requiredFields: z.array(requiredFieldSchema),
 	active: z.boolean(),
 });
+
+async function skusOf(businessId: string) {
+	const rows = await getDb()
+		.select({ sku: schema.products.sku })
+		.from(schema.products)
+		.where(eq(schema.products.businessId, businessId));
+	return rows.map((r) => r.sku);
+}
+
+async function assertSkuFree(businessId: string, sku: string, exceptId = "") {
+	const clash = await getDb().query.products.findFirst({
+		where: and(
+			eq(schema.products.businessId, businessId),
+			sql`upper(${schema.products.sku}) = ${sku.toUpperCase()}`,
+			ne(schema.products.id, exceptId),
+		),
+	});
+	if (clash) fail(new Error(`SKU ${sku} is already used by ${clash.name}`));
+}
+
+async function loadProduct(productId: string) {
+	const row = await getDb().query.products.findFirst({
+		where: eq(schema.products.id, productId),
+	});
+	if (!row) throw new ORPCError("NOT_FOUND");
+	return row;
+}
+
+const MAX_IMAGE = 400_000; // characters of data URL (~300 KB)
+
+const setProductImage = os
+	.input(
+		z.object({
+			productId: z.string(),
+			image: z
+				.string()
+				.max(MAX_IMAGE, "Image is too large")
+				.regex(/^data:image\/(png|jpeg|webp);base64,/, "Not a PNG/JPEG/WebP")
+				.nullable(),
+			actor: z.string(),
+		}),
+	)
+	.handler(async ({ input }) => {
+		const db = getDb();
+		const p = await loadProduct(input.productId);
+		await db
+			.update(schema.products)
+			.set({ image: input.image })
+			.where(eq(schema.products.id, p.id));
+		await emitOrbyteEvent(db, {
+			businessId: p.businessId,
+			type: "product.updated",
+			actor: input.actor,
+			summary: `${input.actor} ${input.image ? "changed" : "removed"} the image of ${p.name}`,
+		});
+		return { ok: true };
+	});
+
+/**
+ * Manual stock moves:
+ * receive = new stock in; deliver = reserved goods handed over (leaves on hand and reserved);
+ * release = cancel a reservation; count = set on hand after a stock take.
+ */
+const adjustStock = os
+	.input(
+		z.object({
+			productId: z.string(),
+			action: z.enum(["receive", "deliver", "release", "count"]),
+			quantity: z.number().int().nonnegative(),
+			actor: z.string(),
+		}),
+	)
+	.handler(async ({ input }) => {
+		const db = getDb();
+		const p = await loadProduct(input.productId);
+		if (p.type !== "stock") fail(new Error(`${p.name} is not a stock item`));
+		const q = input.quantity;
+		let next = { stockOnHand: p.stockOnHand, stockReserved: p.stockReserved };
+		let summary: string;
+		switch (input.action) {
+			case "receive":
+				next.stockOnHand += q;
+				summary = `received ${q} ${p.unit}`;
+				break;
+			case "deliver":
+				if (q > p.stockReserved)
+					fail(new Error(`Only ${p.stockReserved} ${p.unit} are reserved`));
+				next = {
+					stockOnHand: p.stockOnHand - q,
+					stockReserved: p.stockReserved - q,
+				};
+				summary = `delivered ${q} reserved ${p.unit}`;
+				break;
+			case "release":
+				if (q > p.stockReserved)
+					fail(new Error(`Only ${p.stockReserved} ${p.unit} are reserved`));
+				next.stockReserved -= q;
+				summary = `released ${q} reserved ${p.unit}`;
+				break;
+			case "count":
+				next.stockOnHand = q;
+				summary = `counted stock: ${p.stockOnHand} → ${q} ${p.unit}`;
+				break;
+		}
+		const [row] = await db
+			.update(schema.products)
+			.set(next)
+			.where(eq(schema.products.id, p.id))
+			.returning();
+		await emitOrbyteEvent(db, {
+			businessId: p.businessId,
+			type: "stock.adjusted",
+			actor: input.actor,
+			summary: `${input.actor} ${summary} of ${p.name} (${p.sku})`,
+			payload: { productId: p.id, action: input.action, quantity: q, ...next },
+		});
+		return row;
+	});
 
 function slug(text: string) {
 	return text
@@ -397,13 +534,30 @@ function slug(text: string) {
 }
 
 const createProduct = os
-	.input(businessInput.extend({ product: productInput, actor: z.string() }))
+	.input(
+		businessInput.extend({
+			product: productInput,
+			openingStock: z.number().int().nonnegative().default(0),
+			actor: z.string(),
+		}),
+	)
 	.handler(async ({ input }) => {
 		const db = getDb();
 		const business = await db.query.businesses.findFirst({
 			where: eq(schema.businesses.id, input.businessId),
 		});
 		if (!business) throw new ORPCError("NOT_FOUND");
+		const sku =
+			input.product.sku.toUpperCase() ||
+			uniqueSku(
+				suggestSku(
+					business.quotePrefix,
+					input.product.category,
+					input.product.name,
+				),
+				await skusOf(business.id),
+			);
+		await assertSkuFree(business.id, sku);
 		const prefix = `${business.quotePrefix.toLowerCase()}-${slug(input.product.name)}`;
 		const taken = await db
 			.select({ id: schema.products.id })
@@ -412,7 +566,13 @@ const createProduct = os
 		const id = taken.length ? `${prefix}-${taken.length + 1}` : prefix;
 		const [row] = await db
 			.insert(schema.products)
-			.values({ ...input.product, id, businessId: business.id })
+			.values({
+				...input.product,
+				sku,
+				id,
+				businessId: business.id,
+				stockOnHand: input.product.type === "stock" ? input.openingStock : 0,
+			})
 			.returning();
 		await emitOrbyteEvent(db, {
 			businessId: business.id,
@@ -433,9 +593,16 @@ const updateProduct = os
 	)
 	.handler(async ({ input }) => {
 		const db = getDb();
+		const current = await loadProduct(input.productId);
+		const changes = { ...input.product };
+		if (changes.sku !== undefined) {
+			changes.sku = changes.sku.toUpperCase();
+			if (!changes.sku) throw fail(new Error("SKU cannot be empty"));
+			await assertSkuFree(current.businessId, changes.sku, current.id);
+		}
 		const [row] = await db
 			.update(schema.products)
-			.set(input.product)
+			.set(changes)
 			.where(eq(schema.products.id, input.productId))
 			.returning();
 		if (!row) throw new ORPCError("NOT_FOUND");
@@ -542,7 +709,12 @@ export default {
 	},
 	whatsapp: { chats: whatsappChats, open: whatsappOpen },
 	inbox: { list: inboxList },
-	products: { create: createProduct, update: updateProduct },
+	products: {
+		create: createProduct,
+		update: updateProduct,
+		setImage: setProductImage,
+		adjustStock,
+	},
 	rules: { delete: deleteRule },
 	esign: { list: esignList, markViewed, sign },
 	requests: { list: listRequests },

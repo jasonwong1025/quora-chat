@@ -34,7 +34,7 @@ function People() {
 		setLeave((rows) => rows.map((r) => (r.id === id ? { ...r, status } : r)));
 
 	return (
-		<div className="mx-auto max-w-6xl p-4 sm:p-8">
+		<div className="p-4 sm:p-6">
 			<PageHeader
 				title="People"
 				description="Leave, claims and the company directory."

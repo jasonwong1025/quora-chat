@@ -6,6 +6,10 @@ import type { PricingRuleConfig, RequiredField } from "#/db/schema";
 
 type DemoProduct = {
 	id: string;
+	sku: string;
+	/** Defaults to "service" (services and made-to-order work). */
+	type?: "stock" | "service";
+	stockOnHand?: number;
 	category: string;
 	name: string;
 	description: string;
@@ -70,6 +74,7 @@ export const demoBusinesses: DemoBusiness[] = [
 		products: [
 			{
 				id: "kp-flyer-a5",
+				sku: "KP-FLY-A5",
 				category: "Flyers",
 				name: "Flyer A5",
 				description: "Full-colour A5 flyer on art paper.",
@@ -86,6 +91,7 @@ export const demoBusinesses: DemoBusiness[] = [
 			},
 			{
 				id: "kp-flyer-a4",
+				sku: "KP-FLY-A4",
 				category: "Flyers",
 				name: "Flyer A4",
 				description: "Full-colour A4 flyer on art paper.",
@@ -102,6 +108,7 @@ export const demoBusinesses: DemoBusiness[] = [
 			},
 			{
 				id: "kp-namecard",
+				sku: "KP-NC-100",
 				category: "Name cards",
 				name: "Name card (box of 100)",
 				description: "310gsm art card, full colour.",
@@ -114,6 +121,7 @@ export const demoBusinesses: DemoBusiness[] = [
 			},
 			{
 				id: "kp-banner-6x3",
+				sku: "KP-BNR-6X3",
 				category: "Banners",
 				name: "Vinyl banner 6 x 3 ft",
 				description: "Outdoor vinyl banner with eyelets.",
@@ -123,6 +131,7 @@ export const demoBusinesses: DemoBusiness[] = [
 			},
 			{
 				id: "kp-banner-10x4",
+				sku: "KP-BNR-10X4",
 				category: "Banners",
 				name: "Vinyl banner 10 x 4 ft",
 				description: "Outdoor vinyl banner with eyelets.",
@@ -132,6 +141,7 @@ export const demoBusinesses: DemoBusiness[] = [
 			},
 			{
 				id: "kp-banner-custom",
+				sku: "KP-BNR-CUSTOM",
 				category: "Banners",
 				name: "Vinyl banner, custom size",
 				description: "Any size not in the standard list.",
@@ -141,11 +151,61 @@ export const demoBusinesses: DemoBusiness[] = [
 			},
 			{
 				id: "kp-design",
+				sku: "KP-SVC-DESIGN",
 				category: "Services",
 				name: "Artwork design",
 				description: "Simple layout design by our designer, 2 revisions.",
 				unit: "job",
 				unitPriceSen: 8000,
+				requiredFields: [],
+			},
+			{
+				id: "kp-rollup-stand",
+				sku: "KP-STD-ROLLUP",
+				type: "stock",
+				stockOnHand: 12,
+				category: "Display stands",
+				name: "Roll-up banner stand 2 x 5 ft (stand only)",
+				description:
+					"Aluminium roll-up stand with carry bag. Print not included.",
+				unit: "pc",
+				unitPriceSen: 6500,
+				requiredFields: [],
+			},
+			{
+				id: "kp-x-stand",
+				sku: "KP-STD-XSTAND",
+				type: "stock",
+				stockOnHand: 3,
+				category: "Display stands",
+				name: "X-banner stand 2 x 5 ft (stand only)",
+				description: "Lightweight X-frame stand. Print not included.",
+				unit: "pc",
+				unitPriceSen: 2800,
+				requiredFields: [],
+			},
+			{
+				id: "kp-kt-board",
+				sku: "KP-BRD-KT5",
+				type: "stock",
+				stockOnHand: 280,
+				category: "Boards",
+				name: "KT board 4 x 8 ft (5mm)",
+				description: "Foam board sheet for mounting prints.",
+				unit: "sheet",
+				unitPriceSen: 3500,
+				requiredFields: [],
+			},
+			{
+				id: "kp-pp-sheet",
+				sku: "KP-BRD-PP3",
+				type: "stock",
+				stockOnHand: 0,
+				category: "Boards",
+				name: "PP hollow sheet 4 x 8 ft (3mm)",
+				description: "Corrugated plastic sheet for signage.",
+				unit: "sheet",
+				unitPriceSen: 3800,
 				requiredFields: [],
 			},
 		],
@@ -264,6 +324,11 @@ export const demoBusinesses: DemoBusiness[] = [
 				customerName: "Kak Ros",
 				body: "Saya nak buat flyer untuk kedai kek saya, berapa harga?",
 			},
+			{
+				label: "Low stock (English)",
+				customerName: "Ken",
+				body: "Hi, I need 5 X-banner stands and 2 roll-up stands, stands only, no printing. For an expo this Saturday.",
+			},
 		],
 	},
 	{
@@ -284,6 +349,7 @@ export const demoBusinesses: DemoBusiness[] = [
 		products: [
 			{
 				id: "sm-general-service",
+				sku: "SM-SVC-GENERAL",
 				category: "Servicing",
 				name: "General service",
 				description: "Filter and coil cleaning, drainage check.",
@@ -293,6 +359,7 @@ export const demoBusinesses: DemoBusiness[] = [
 			},
 			{
 				id: "sm-chemical-wash",
+				sku: "SM-SVC-CHEMWASH",
 				category: "Servicing",
 				name: "Chemical wash",
 				description: "Full dismantle and chemical wash of indoor unit.",
@@ -302,6 +369,7 @@ export const demoBusinesses: DemoBusiness[] = [
 			},
 			{
 				id: "sm-gas-topup",
+				sku: "SM-SVC-R32",
 				category: "Servicing",
 				name: "R32 gas top-up",
 				description: "Top up refrigerant to spec.",
@@ -311,6 +379,7 @@ export const demoBusinesses: DemoBusiness[] = [
 			},
 			{
 				id: "sm-install",
+				sku: "SM-INS-STD",
 				category: "Installation",
 				name: "Installation (customer-supplied unit)",
 				description: "Includes up to 10 ft piping and bracket.",
@@ -327,12 +396,51 @@ export const demoBusinesses: DemoBusiness[] = [
 			},
 			{
 				id: "sm-repair",
+				sku: "SM-REP-VISIT",
 				category: "Repair",
 				name: "Repair / troubleshooting",
 				description:
 					"Inspection visit. Parts and labour quoted after diagnosis.",
 				unit: "visit",
 				unitPriceSen: 6000,
+				requiredFields: [],
+			},
+			{
+				id: "sm-unit-inv10",
+				sku: "SM-AC-INV1.0",
+				type: "stock",
+				stockOnHand: 6,
+				category: "Aircon units",
+				name: "Inverter aircon 1.0HP wall-mounted (unit only)",
+				description:
+					"R32 inverter split unit, 1.0HP. Installation quoted separately.",
+				unit: "unit",
+				unitPriceSen: 145000,
+				requiredFields: [],
+			},
+			{
+				id: "sm-unit-inv15",
+				sku: "SM-AC-INV1.5",
+				type: "stock",
+				stockOnHand: 2,
+				category: "Aircon units",
+				name: "Inverter aircon 1.5HP wall-mounted (unit only)",
+				description:
+					"R32 inverter split unit, 1.5HP. Installation quoted separately.",
+				unit: "unit",
+				unitPriceSen: 188000,
+				requiredFields: [],
+			},
+			{
+				id: "sm-bracket",
+				sku: "SM-PRT-BRACKET",
+				type: "stock",
+				stockOnHand: 25,
+				category: "Parts",
+				name: "Outdoor unit wall bracket",
+				description: "Galvanised steel bracket for the outdoor compressor.",
+				unit: "set",
+				unitPriceSen: 4500,
 				requiredFields: [],
 			},
 		],
@@ -408,6 +516,11 @@ export const demoBusinesses: DemoBusiness[] = [
 				customerName: "Jess",
 				body: "Boss can install aircon for me ah? I already bought the unit.",
 			},
+			{
+				label: "Buy + install (Manglish)",
+				customerName: "Hafizah",
+				body: "Boss nak beli 3 unit inverter aircon 1.5hp, wall-mounted, and install at my condo ground floor. Can?",
+			},
 		],
 	},
 	{
@@ -427,6 +540,7 @@ export const demoBusinesses: DemoBusiness[] = [
 		products: [
 			{
 				id: "rr-paint-room",
+				sku: "RR-PNT-ROOM",
 				category: "Painting",
 				name: "Interior wall painting (per room)",
 				description: "Two coats, walls only. Ceilings quoted separately.",
@@ -451,6 +565,7 @@ export const demoBusinesses: DemoBusiness[] = [
 			},
 			{
 				id: "rr-tiling",
+				sku: "RR-TIL-LABOUR",
 				category: "Tiling",
 				name: "Floor tiling (labour)",
 				description: "Laying tiles supplied by customer.",
@@ -460,6 +575,7 @@ export const demoBusinesses: DemoBusiness[] = [
 			},
 			{
 				id: "rr-plumbing-fix",
+				sku: "RR-PLB-FIX",
 				category: "Plumbing",
 				name: "Leak / tap repair",
 				description:
@@ -476,6 +592,7 @@ export const demoBusinesses: DemoBusiness[] = [
 			},
 			{
 				id: "rr-door-install",
+				sku: "RR-DR-INSTALL",
 				category: "Doors",
 				name: "Door installation",
 				description: "Remove old door and fit new one. Door not included.",
@@ -491,6 +608,7 @@ export const demoBusinesses: DemoBusiness[] = [
 			},
 			{
 				id: "rr-handyman",
+				sku: "RR-HDY-HOUR",
 				category: "Handyman",
 				name: "Handyman (hourly)",
 				description: "Odd jobs: shelves, curtain rails, minor fixes.",
@@ -500,11 +618,49 @@ export const demoBusinesses: DemoBusiness[] = [
 			},
 			{
 				id: "rr-waterproofing",
+				sku: "RR-WP-JOB",
 				category: "Waterproofing",
 				name: "Waterproofing",
 				description: "Bathroom or roof waterproofing.",
 				unit: "job",
 				unitPriceSen: 0,
+				requiredFields: [],
+			},
+			{
+				id: "rr-curtain-rail",
+				sku: "RR-MAT-CRAIL6",
+				type: "stock",
+				stockOnHand: 15,
+				category: "Materials",
+				name: "Curtain rail set 6 ft",
+				description:
+					"Aluminium rail with brackets and rings. Fitting by handyman.",
+				unit: "set",
+				unitPriceSen: 5500,
+				requiredFields: [],
+			},
+			{
+				id: "rr-shelf",
+				sku: "RR-MAT-SHELF3",
+				type: "stock",
+				stockOnHand: 8,
+				category: "Materials",
+				name: "Floating wall shelf 3 ft (pine)",
+				description: "Shelf with hidden bracket. Fitting by handyman.",
+				unit: "pc",
+				unitPriceSen: 4000,
+				requiredFields: [],
+			},
+			{
+				id: "rr-led-light",
+				sku: "RR-MAT-LED18",
+				type: "stock",
+				stockOnHand: 40,
+				category: "Materials",
+				name: "LED ceiling light 18W",
+				description: "Round surface-mount LED panel, daylight.",
+				unit: "pc",
+				unitPriceSen: 3500,
 				requiredFields: [],
 			},
 		],
@@ -570,6 +726,11 @@ export const demoBusinesses: DemoBusiness[] = [
 				label: "Simple job (Manglish)",
 				customerName: "Mei Ling",
 				body: "Bathroom tap leaking already 2 days, can come fix ah?",
+			},
+			{
+				label: "Materials (BM)",
+				customerName: "Siti",
+				body: "Nak beli 4 set curtain rail 6 kaki dan 2 lampu LED siling 18W. Ada stok?",
 			},
 		],
 	},

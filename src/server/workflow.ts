@@ -2,7 +2,7 @@
  * The quotation workflow: customer message → structured request → pricing
  * check → draft / clarification / human review → approval → reply.
  */
-import { and, asc, count, desc, eq, inArray } from "drizzle-orm";
+import { and, asc, count, desc, eq, inArray, sql } from "drizzle-orm";
 import { getDb, schema } from "#/db";
 import type {
 	ExtractedRequest,
@@ -755,6 +755,7 @@ export async function signQuote(input: {
 		actor: input.signerName,
 		summary: `${input.signerName} signed ${quote.number}`,
 	});
+	await reserveStock(quote, request.id, input.signerName);
 	await emitOrbyteEvent(db, {
 		businessId: quote.businessId,
 		requestId: request.id,
@@ -768,4 +769,43 @@ export async function signQuote(input: {
 		body: signedThanks[request.extracted.language](quote.number),
 	});
 	return row;
+}
+
+/** A signed quote reserves its stock items so they are not promised twice. */
+async function reserveStock(
+	quote: typeof schema.quotes.$inferSelect,
+	requestId: string,
+	signerName: string,
+) {
+	const db = getDb();
+	const qty = new Map<string, number>();
+	for (const l of quote.lineItems) {
+		if (l.productId)
+			qty.set(l.productId, (qty.get(l.productId) ?? 0) + l.quantity);
+	}
+	if (qty.size === 0) return;
+	const items = await db
+		.select()
+		.from(schema.products)
+		.where(
+			and(
+				inArray(schema.products.id, [...qty.keys()]),
+				eq(schema.products.type, "stock"),
+			),
+		);
+	for (const p of items) {
+		const n = qty.get(p.id) ?? 0;
+		await db
+			.update(schema.products)
+			.set({ stockReserved: sql`${schema.products.stockReserved} + ${n}` })
+			.where(eq(schema.products.id, p.id));
+		await emitOrbyteEvent(db, {
+			businessId: quote.businessId,
+			requestId,
+			type: "stock.reserved",
+			actor: signerName,
+			summary: `Reserved ${n} ${p.unit} of ${p.name} (${p.sku}) for ${quote.number}`,
+			payload: { productId: p.id, quantity: n },
+		});
+	}
 }

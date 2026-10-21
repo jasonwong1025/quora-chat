@@ -27,7 +27,9 @@ export type OrbyteEventType =
 	| "esign.viewed"
 	| "esign.signed"
 	| "product.created"
-	| "product.updated";
+	| "product.updated"
+	| "stock.reserved"
+	| "stock.adjusted";
 
 export async function emitOrbyteEvent(
 	db: Db,

@@ -6,6 +6,7 @@ import {
 	pgTable,
 	text,
 	timestamp,
+	uniqueIndex,
 } from "drizzle-orm/pg-core";
 
 const id = () =>
@@ -40,22 +41,35 @@ export type RequiredField = {
 	options?: string[];
 };
 
-export const products = pgTable("products", {
-	id: text("id").primaryKey(), // e.g. "kp-flyer-a5"
-	businessId: text("business_id")
-		.notNull()
-		.references(() => businesses.id, { onDelete: "cascade" }),
-	category: text("category").notNull(),
-	name: text("name").notNull(),
-	description: text("description").notNull(),
-	unit: text("unit").notNull(), // "pc", "unit", "sqft", "job"
-	unitPriceSen: integer("unit_price_sen").notNull(),
-	requiredFields: jsonb("required_fields")
-		.$type<RequiredField[]>()
-		.default([])
-		.notNull(),
-	active: boolean("active").default(true).notNull(),
-});
+/** "stock" items are counted and reserved; "service" covers services and made-to-order work. */
+export const productType = pgEnum("product_type", ["stock", "service"]);
+
+export const products = pgTable(
+	"products",
+	{
+		id: text("id").primaryKey(), // e.g. "kp-flyer-a5"
+		businessId: text("business_id")
+			.notNull()
+			.references(() => businesses.id, { onDelete: "cascade" }),
+		sku: text("sku").notNull(), // e.g. "KP-FLY-A5", unique per business
+		type: productType("type").default("service").notNull(),
+		category: text("category").notNull(),
+		name: text("name").notNull(),
+		description: text("description").notNull(),
+		unit: text("unit").notNull(), // "pc", "unit", "sqft", "job"
+		unitPriceSen: integer("unit_price_sen").notNull(),
+		requiredFields: jsonb("required_fields")
+			.$type<RequiredField[]>()
+			.default([])
+			.notNull(),
+		active: boolean("active").default(true).notNull(),
+		// Stock items only. Available = on hand − reserved (reserved when a customer signs).
+		stockOnHand: integer("stock_on_hand").default(0).notNull(),
+		stockReserved: integer("stock_reserved").default(0).notNull(),
+		image: text("image"), // small data URL; served from /api/products/:id/image
+	},
+	(t) => [uniqueIndex("products_business_sku").on(t.businessId, t.sku)],
+);
 
 export type PricingRuleConfig =
 	| {
@@ -163,7 +177,12 @@ export type ExtractedRequest = {
 };
 
 export type Flag = {
-	kind: "missing_info" | "unknown_item" | "needs_assessment" | "ai_uncertain";
+	kind:
+		| "missing_info"
+		| "unknown_item"
+		| "needs_assessment"
+		| "insufficient_stock"
+		| "ai_uncertain";
 	message: string;
 	itemIndex?: number;
 	field?: string;

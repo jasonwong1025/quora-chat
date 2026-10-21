@@ -15,6 +15,8 @@ Customers send messages in English, Bahasa Melayu, Chinese, or a mix. Quora Chat
 6. Staff can **take over** any chat. The AI pauses until they hand it back.
 7. Every step is recorded as a **simulated Orbyte activity event**.
 
+Staff see the AI's reasoning for each message in the inbox ("AI thinking"). Products carry a SKU, a type (stock item or service) and stock levels: a quote that needs more than is available is flagged for review, and signing a quote reserves its stock.
+
 ## Two sides of the demo
 
 | URL | Who you are | What it is |
@@ -52,9 +54,9 @@ Set `OPENROUTER_API_KEY` (from https://openrouter.ai/keys). `AI_MODEL` takes an 
 
 | Business | Industry | Shows off |
 | --- | --- | --- |
-| Kilat Print Studio | Printing | quantity tiers, double-sided surcharges, minimum charge, custom-size review |
-| SejukMax Aircon Services | Aircon servicing | per-unit tiers, ceiling-cassette surcharge, repairs needing diagnosis |
-| Rumah Rapi Renovation | Renovation & handyman | site-visit flags (tiling, large rooms), paint-supply surcharge |
+| Kilat Print Studio | Printing | quantity tiers, double-sided surcharges, minimum charge, custom-size review, low stock (only 3 X-banner stands) |
+| SejukMax Aircon Services | Aircon servicing | per-unit tiers, ceiling-cassette surcharge, repairs needing diagnosis, selling stocked aircon units |
+| Rumah Rapi Renovation | Renovation & handyman | site-visit flags (tiling, large rooms), paint-supply surcharge, materials from stock |
 
 Each business has sample customer messages. Open an empty WhatsApp chat to tap one.
 
@@ -69,7 +71,7 @@ src/
     pricing.ts          deterministic pricing engine
     workflow.ts         message → request → outcome → approval
     orbyte.ts           simulated Orbyte activity events
-    hono.ts             /api app: oRPC handler, quote PDF, health
+    hono.ts             /api app: oRPC handler, quote PDF, product images, health
     quote-pdf.tsx       PDF layout
   orpc/                 oRPC router and isomorphic client
   data/orbyte-static.ts sample data for People / Work / Connect

@@ -29,7 +29,7 @@ function Work() {
 	const projects = getProjects(business.staff);
 
 	return (
-		<div className="mx-auto max-w-6xl p-4 sm:p-8">
+		<div className="p-4 sm:p-6">
 			<PageHeader
 				title="Work"
 				description="Today's status and this month's focus for the team."

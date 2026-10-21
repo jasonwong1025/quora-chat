@@ -17,7 +17,18 @@ export type CatalogProduct = {
 	unit: string;
 	unitPriceSen: number;
 	requiredFields: RequiredField[];
+	/** Stock items are checked against what is available (on hand − reserved). */
+	type?: "stock" | "service";
+	stockOnHand?: number;
+	stockReserved?: number;
 };
+
+export function availableStock(p: {
+	stockOnHand?: number;
+	stockReserved?: number;
+}) {
+	return (p.stockOnHand ?? 0) - (p.stockReserved ?? 0);
+}
 
 export type CatalogRule = {
 	productId: string | null;
@@ -192,6 +203,21 @@ export function priceRequest(
 		if (assessment) {
 			notes.push("Price to be confirmed after assessment");
 			log.push(`Needs assessment: ${assessment}`);
+		}
+		if (product.type === "stock") {
+			const available = availableStock(product);
+			if (qty > available) {
+				flags.push({
+					kind: "insufficient_stock",
+					itemIndex,
+					message: `${product.name}: only ${Math.max(available, 0)} ${product.unit} available, customer wants ${qty}.`,
+				});
+				log.push(
+					`Stock: only ${Math.max(available, 0)} available for ${qty} needed — flagged for staff`,
+				);
+			} else {
+				log.push(`Stock: ${available} available, enough for ${qty}`);
+			}
 		}
 		explain.push({ itemIndex, lines: log });
 

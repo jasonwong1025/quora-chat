@@ -115,7 +115,7 @@ function Home() {
 	];
 
 	return (
-		<div className="mx-auto max-w-6xl p-4 sm:p-8">
+		<div className="p-4 sm:p-6">
 			<div
 				className="mb-6 overflow-hidden rounded-2xl p-6 text-white sm:p-8"
 				style={{ background: "var(--orb-gradient)" }}

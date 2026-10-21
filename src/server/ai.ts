@@ -111,11 +111,12 @@ export type ChatTurn = {
 export async function extractRequest(input: {
 	businessName: string;
 	industry: string;
-	products: (CatalogProduct & { description: string })[];
+	products: (CatalogProduct & { description: string; sku: string })[];
 	history: ChatTurn[];
 }): Promise<ExtractedRequest> {
 	const catalog = input.products.map((p) => ({
 		id: p.id,
+		sku: p.sku,
 		name: p.name,
 		description: p.description,
 		unit: p.unit,

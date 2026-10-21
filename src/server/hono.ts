@@ -24,6 +24,20 @@ app.use("/rpc/*", async (c, next) => {
 	await next();
 });
 
+app.get("/products/:id/image", async (c) => {
+	const product = await getDb().query.products.findFirst({
+		where: eq(schema.products.id, c.req.param("id")),
+		columns: { image: true },
+	});
+	const match = product?.image?.match(/^data:(image\/[a-z]+);base64,(.+)$/);
+	if (!match) return c.notFound();
+	return c.body(Buffer.from(match[2], "base64"), 200, {
+		"Content-Type": match[1],
+		// The URL carries a version hash, so it can be cached for a long time.
+		"Cache-Control": "public, max-age=31536000, immutable",
+	});
+});
+
 app.get("/quotes/:id/pdf", async (c) => {
 	const db = getDb();
 	const quote = await db.query.quotes.findFirst({
