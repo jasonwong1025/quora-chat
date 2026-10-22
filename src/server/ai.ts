@@ -152,6 +152,8 @@ export type ReadInput = {
 	sentQuote: { number: string; lines: string[]; signed: boolean } | null;
 	history: ChatTurn[];
 	latestHasAttachment: boolean;
+	/** The language we replied in last time; kept when the latest message has no clear language. */
+	previousLanguage: Language | null;
 	today: string; // YYYY-MM-DD, Malaysia time
 };
 
@@ -281,7 +283,7 @@ Rules:
   - "none": anything else, including asking to change the quote (that's wantsChange).
   note = a few words on their reason, or null.
 - customerQuestion: if they asked us something that is not a requirement (opening hours, location, turnaround…), the question in short English. Otherwise null.
-- language: the language of the customer's messages ("mixed" if they mix).
+- language: the language of the customer's LATEST message only, not the whole chat (customers switch, and we follow them). "mixed" only when that message itself mixes languages, e.g. Manglish or rojak ("boleh, but need it by Friday"). If the latest message has no clear language (just "ok", "yes", a number, a name, an emoji, a file), return "${input.previousLanguage ?? "en"}".
 - summary: one short English sentence describing the whole request.
 - reasoning: 2-5 short English notes for our staff on how you read the latest message: what changed, how you mapped slang or other languages, anything you were unsure about.
 - Never invent prices.`;
@@ -301,8 +303,24 @@ const languageName: Record<Language, string> = {
 	en: "English",
 	ms: "Bahasa Melayu",
 	zh: "Simplified Chinese",
-	mixed: "the same mix of languages the customer uses",
+	mixed: "the same mix of languages as the customer's latest message",
 };
+
+/** The customer's latest message, which decides the reply language. */
+function latestCustomerText(history: ChatTurn[]) {
+	return (
+		[...history].reverse().find((m) => m.sender === "customer")?.body ?? ""
+	);
+}
+
+/** One language for the whole reply, even when our notes are in English. */
+function languageRule(language: Language, latest: string) {
+	return `Write the whole message in ${languageName[language]}${
+		latest
+			? `, the language of their latest message ("${latest.slice(0, 160)}")`
+			: ""
+	}. Follow their latest message even if earlier messages, or our earlier replies, were in another language. Don't switch languages mid-message. The instructions, recap items and notes below are in English for you: translate them, keeping product names, sizes and the customer's own words as written.`;
+}
 
 export type Ask = {
 	about: string | null; // product name, if the question is about one item
@@ -407,7 +425,8 @@ export async function writeReply(input: ReplyInput): Promise<string> {
 	const system = `You are a staff member at "${b.name}" (${b.industry}, Malaysia), replying to a customer on WhatsApp. Write the way a friendly, experienced person at a small Malaysian business actually texts: warm, relaxed, short and clear. Not a bot, not a call centre.
 
 How to write:
-- Reply in ${languageName[input.language]}, matching the customer's register. If they write casual Manglish or rojak, you can be casual too (a light "ya", "can", "boleh", "ok noted" is fine; don't overdo "lah"). If they're formal, be polite. For Bahasa Melayu use everyday Malay, not stiff textbook Malay. For Chinese use natural simplified Chinese.
+- ${languageRule(input.language, latestCustomerText(input.history))}
+- Match the customer's register. If they write casual Manglish or rojak, you can be casual too (a light "ya", "can", "boleh", "ok noted" is fine; don't overdo "lah"). If they're formal, be polite. For Bahasa Melayu use everyday Malay, not stiff textbook Malay. For Chinese use natural simplified Chinese.
 - ${input.firstReply ? `This is your first reply, so a short hello is fine${input.customerName ? ` (their name: ${input.customerName}; if you use it, write it exactly like that, never shortened)` : ""}.` : "Don't greet again; you're mid-conversation."}
 - Briefly acknowledge what they just said when it helps (a few words, e.g. "Ok, 500 pcs noted"), then get to the point. Don't open every message with "Thank you" or "Great!".
 - Ask only what you're told to ask, in one flowing message. Offer options the way people talk ("single or double sided?"), not like a form. If there are two questions, a tiny numbered list is ok.
@@ -437,7 +456,7 @@ ${info || "(nothing extra)"}${faq ? `\n\nThe business's published FAQ (you may u
 			{ role: "system", content: system },
 			{
 				role: "user",
-				content: `Conversation so far:\n${transcript(input.history.slice(-12))}\n\nWhat to do now:\n${planText(input.plan)}${extra ? `\n${extra}` : ""}\n\nWrite only the message text.`,
+				content: `Conversation so far:\n${transcript(input.history.slice(-12))}\n\nWhat to do now:\n${planText(input.plan)}${extra ? `\n${extra}` : ""}\n\nWrite only the message text, all in ${languageName[input.language]}.`,
 			},
 		],
 	});

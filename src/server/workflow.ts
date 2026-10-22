@@ -1031,6 +1031,43 @@ async function tellStaffAboutAvailability(
 	});
 }
 
+/**
+ * "ok", "5", "👍", "tq" or a bare file say nothing about language, so they keep
+ * the one we were using instead of flipping the reply to English.
+ */
+export function hasClearLanguage(text: string) {
+	const words = text
+		.toLowerCase()
+		.replace(/[^\p{L}\s]/gu, " ")
+		.split(/\s+/)
+		.filter(Boolean);
+	if (/\p{Script=Han}/u.test(text)) return true;
+	const neutral = new Set([
+		"ok",
+		"okay",
+		"okey",
+		"oke",
+		"k",
+		"kk",
+		"yes",
+		"no",
+		"noted",
+		"tq",
+		"ty",
+		"thanks",
+		"thx",
+		"sure",
+		"done",
+		"hi",
+		"hello",
+		"pcs",
+		"pc",
+		"unit",
+		"units",
+	]);
+	return words.filter((w) => !neutral.has(w) && w.length > 1).length > 0;
+}
+
 function fallbackReply(language: Language) {
 	return language === "ms"
 		? "Ok noted, team kami akan semak dan balas sekejap lagi ya."
@@ -1306,6 +1343,19 @@ async function* customerTurn(
 		sent?.request.brief ??
 		emptyBrief();
 	const products = intakeProducts(catalog.products);
+	// Replies follow the customer's latest message; "ok" or a photo keeps the language we were using.
+	const previousLanguage =
+		open?.brief.language ??
+		sent?.request.brief.language ??
+		(
+			await db.query.quoteRequests.findFirst({
+				where: eq(schema.quoteRequests.conversationId, conversation.id),
+				orderBy: desc(schema.quoteRequests.createdAt),
+			})
+		)?.brief.language ??
+		null;
+	const latestText =
+		[...history].reverse().find((m) => m.sender === "customer")?.body ?? "";
 	let reading: Reading;
 	try {
 		reading = await readTurn({
@@ -1351,6 +1401,7 @@ async function* customerTurn(
 				: null,
 			history,
 			latestHasAttachment: Boolean(attachment),
+			previousLanguage,
 			today: todayMY(),
 		});
 	} catch (err) {
@@ -1386,6 +1437,9 @@ async function* customerTurn(
 		return;
 	}
 
+	if (previousLanguage && !hasClearLanguage(latestText))
+		reading = { ...reading, language: previousLanguage };
+
 	yield {
 		step: "parsed",
 		summary: reading.summary,
@@ -1411,7 +1465,9 @@ async function* customerTurn(
 		kind: "understand",
 		title: reading.summary || "Reading the message",
 		detail: [
-			`Customer is writing in ${languageLabel[reading.language]}`,
+			previousLanguage && previousLanguage !== reading.language
+				? `Customer switched from ${languageLabel[previousLanguage]} to ${languageLabel[reading.language]}, so we reply in ${languageLabel[reading.language]} too`
+				: `Latest message is in ${languageLabel[reading.language]}, so we reply in it`,
 			...reading.reasoning,
 			...(reading.customerQuestion
 				? [`They asked: ${reading.customerQuestion}`]
