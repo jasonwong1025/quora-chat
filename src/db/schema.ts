@@ -174,6 +174,8 @@ export const conversations = pgTable("conversations", {
 	handledBy: text("handled_by").references(() => staff.id, {
 		onDelete: "set null",
 	}),
+	/** Set while the AI handles a message, so turns in one chat don't overlap. */
+	processingUntil: timestamp("processing_until", { withTimezone: true }),
 	createdAt: createdAt(),
 });
 

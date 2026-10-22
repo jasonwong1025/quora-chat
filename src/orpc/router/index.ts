@@ -323,7 +323,7 @@ const getQuote = os
 const lineItemSchema = z.object({
 	productId: z.string().nullable(),
 	description: z.string().min(1),
-	quantity: z.number().positive(),
+	quantity: z.number().int().positive(),
 	unit: z.string(),
 	unitPriceSen: z.number().int().nonnegative(),
 	amountSen: z.number().int().nonnegative(),

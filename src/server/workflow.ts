@@ -6,7 +6,18 @@
  * Code decides what is missing and which stage we're in. The AI only reads
  * answers out of messages and words the replies.
  */
-import { and, asc, count, desc, eq, inArray, sql } from "drizzle-orm";
+import {
+	and,
+	asc,
+	count,
+	desc,
+	eq,
+	inArray,
+	isNull,
+	lte,
+	or,
+	sql,
+} from "drizzle-orm";
 import { type Database, getDb, schema } from "#/db";
 import type {
 	Answer,
@@ -967,7 +978,6 @@ export async function* handleCustomerMessage(input: {
 		where: eq(schema.conversations.id, input.conversationId),
 	});
 	if (!conversation) throw new Error("Conversation not found");
-	const { businessId } = conversation;
 
 	const attachment: Attachment | null = input.attachment
 		? {
@@ -994,7 +1004,93 @@ export async function* handleCustomerMessage(input: {
 			.returning();
 		return message;
 	});
+	const lease = await claimTurn(conversation.id);
+	try {
+		// Re-read: staff may have taken over while this message waited.
+		const fresh =
+			(await db.query.conversations.findFirst({
+				where: eq(schema.conversations.id, conversation.id),
+			})) ?? conversation;
+		yield* customerTurn(fresh, incoming, attachment, input);
+	} finally {
+		await releaseTurn(conversation.id, lease);
+	}
+}
+
+const TURN_LEASE_MS = 90_000;
+
+/**
+ * Waits for this chat's turn: one AI turn at a time per chat, so two quick
+ * messages don't race on the same requirements. A lease, not a lock: a turn
+ * that crashes frees the chat after 90 seconds.
+ */
+async function claimTurn(conversationId: string) {
+	const deadline = Date.now() + 60_000;
+	for (;;) {
+		const until = new Date(Date.now() + TURN_LEASE_MS);
+		const [row] = await getDb()
+			.update(schema.conversations)
+			.set({ processingUntil: until })
+			.where(
+				and(
+					eq(schema.conversations.id, conversationId),
+					or(
+						isNull(schema.conversations.processingUntil),
+						lte(schema.conversations.processingUntil, new Date()),
+					),
+				),
+			)
+			.returning({ id: schema.conversations.id });
+		if (row) return until;
+		// Never stall a customer forever behind a stuck turn.
+		if (Date.now() > deadline) return null;
+		await new Promise((r) => setTimeout(r, 250));
+	}
+}
+
+async function releaseTurn(conversationId: string, lease: Date | null) {
+	if (!lease) return;
+	await getDb()
+		.update(schema.conversations)
+		.set({ processingUntil: null })
+		.where(
+			and(
+				eq(schema.conversations.id, conversationId),
+				eq(schema.conversations.processingUntil, lease),
+			),
+		);
+}
+
+/** One AI turn for a customer message, run while this chat's turn is held. */
+async function* customerTurn(
+	conversation: typeof schema.conversations.$inferSelect,
+	incoming: typeof schema.messages.$inferSelect,
+	attachment: Attachment | null,
+	input: { body: string },
+): AsyncGenerator<WorkflowStep> {
+	const db = getDb();
+	const { businessId } = conversation;
 	const run = await startRun(conversation.id, incoming.id);
+	// A newer message arrived while we waited: its turn reads this one too, so the
+	// customer gets one reply to both instead of two that race each other.
+	const latest = await db.query.messages.findFirst({
+		where: and(
+			eq(schema.messages.conversationId, conversation.id),
+			eq(schema.messages.sender, "customer"),
+		),
+		orderBy: desc(schema.messages.createdAt),
+		columns: { id: true },
+	});
+	if (latest && latest.id !== incoming.id) {
+		await run.add({
+			kind: "read",
+			title: "Answered together with their next message",
+			detail: ["The customer sent another message right after this one."],
+		});
+		await run.finish("done");
+		yield { step: "held", staffName: null };
+		return;
+	}
 	const open = await findOpenRequest(conversation.id);
 	await emitOrbyteEvent(db, {
 		businessId,
@@ -1735,10 +1831,21 @@ export async function editDraftQuote(input: {
 		if (productIds.some((id) => !products.some((p) => p.id === id)))
 			throw new Error("Quote items must belong to this business");
 
-		const lineItems = input.lineItems.map((l) => ({
-			...l,
-			amountSen: l.amountSen ?? l.unitPriceSen * l.quantity,
-		}));
+		// Amounts are computed here, never trusted from the browser. A line left exactly
+		// as the pricing engine wrote it keeps its amount (e.g. a minimum charge).
+		const lineItems = input.lineItems.map((l) => {
+			const unchanged = current.lineItems.some(
+				(o) =>
+					o.productId === l.productId &&
+					o.quantity === l.quantity &&
+					o.unitPriceSen === l.unitPriceSen &&
+					o.amountSen === l.amountSen,
+			);
+			return {
+				...l,
+				amountSen: unchanged ? l.amountSen : l.unitPriceSen * l.quantity,
+			};
+		});
 		const [row] = await db
 			.update(schema.quotes)
 			.set({
@@ -1915,6 +2022,14 @@ export async function decideQuote(input: {
 				decidedBy: member.id,
 				decidedAt: now,
 				decisionReason: input.decision === "rejected" ? reason : null,
+				// Validity runs from when the customer receives it, not from the draft.
+				...(input.decision === "approved" && business
+					? {
+							validUntil: new Date(
+								now.getTime() + business.quoteValidityDays * 86_400_000,
+							),
+						}
+					: {}),
 			})
 			.where(eq(schema.quotes.id, quote.id))
 			.returning();
@@ -2020,7 +2135,9 @@ export async function decideQuote(input: {
 					name: conversation?.customerName ?? "",
 					number: quote.number,
 					total: formatMYR(quote.totalSen),
-					validUntil: quote.validUntil.toLocaleDateString("en-MY"),
+					validUntil: row.validUntil.toLocaleDateString("en-MY", {
+						timeZone: "Asia/Kuala_Lumpur",
+					}),
 					sst: Boolean(business?.sstRegistered),
 					revision: quote.revision > 1,
 				}),

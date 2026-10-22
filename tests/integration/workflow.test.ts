@@ -1660,3 +1660,154 @@ test("flagship demo (replay mode): Kilat flyers from first message to an actiona
 		delete process.env.AI_MODE;
 	}
 });
+
+test("reliability: two quick customer messages get one consistent turn, not a race", async () => {
+	const s = await scenario();
+	const db = getDb();
+	reading = {
+		language: "en",
+		summary: "System for 50 users",
+		items: [
+			{
+				ref: "item",
+				productId: s.product.id,
+				match: "exact",
+				candidateProductIds: [],
+				rawText: "custom system",
+				quantity: 1,
+				removed: false,
+				reason: "Same system",
+				answers: [
+					{
+						key: "users",
+						values: ["50"],
+						state: "known",
+						evidenceMessageId: "LATEST",
+					},
+				],
+			},
+		],
+		general: [],
+		followUpAnswers: [],
+		followUp: null,
+		confirmation: "none",
+		wantsChange: false,
+		quoteResponse: {
+			intent: "none",
+			resumeOn: null,
+			lostReason: null,
+			note: null,
+		},
+		customerQuestion: null,
+		reasoning: ["No change"],
+	};
+	const drain = async (body: string) => {
+		for await (const _ of handleCustomerMessage({
+			conversationId: s.conversation.id,
+			body,
+		})) {
+			/* drain */
+		}
+	};
+	await Promise.all([drain("Hello?"), drain("Are you there?")]);
+	const runs = await db
+		.select()
+		.from(schema.aiRuns)
+		.where(eq(schema.aiRuns.conversationId, s.conversation.id));
+	assert.equal(runs.length, 2);
+	assert.ok(runs.every((r) => r.status === "done"));
+	const messages = await db
+		.select()
+		.from(schema.messages)
+		.where(eq(schema.messages.conversationId, s.conversation.id))
+		.orderBy(schema.messages.createdAt);
+	const lastCustomer = messages.filter((m) => m.sender === "customer").at(-1);
+	assert.equal(messages.at(-1)?.sender, "assistant"); // the customer got an answer
+	const request = await db.query.quoteRequests.findFirst({
+		where: eq(schema.quoteRequests.id, s.request.id),
+	});
+	assert.equal(request?.processedMessageId, lastCustomer?.id); // nothing left unreviewed
+	const chat = await db.query.conversations.findFirst({
+		where: eq(schema.conversations.id, s.conversation.id),
+	});
+	assert.equal(chat?.processingUntil, null); // the turn was released
+});
+
+test("reliability: an expired quote is extended once, even if the scheduler runs twice", async () => {
+	const s = await scenario();
+	const db = getDb();
+	const quote = await approve(s);
+	const [expired] = await db
+		.update(schema.quotes)
+		.set({ validUntil: new Date(Date.now() - 60_000) })
+		.where(eq(schema.quotes.id, quote.id))
+		.returning();
+	const { handleExpiry } = await import("../../src/server/followups");
+	await Promise.all([handleExpiry(expired), handleExpiry(expired)]);
+	const extensions = await db
+		.select()
+		.from(schema.quoteFollowUps)
+		.where(
+			and(
+				eq(schema.quoteFollowUps.quoteId, quote.id),
+				eq(schema.quoteFollowUps.kind, "extension"),
+			),
+		);
+	assert.equal(extensions.length, 1);
+	const after = await db.query.quotes.findFirst({
+		where: eq(schema.quotes.id, quote.id),
+	});
+	assert.equal(after?.status, "approved");
+	assert.ok(after?.extendedAt);
+	assert.ok((after?.validUntil.getTime() ?? 0) > Date.now());
+
+	// Signed in the meantime: a stale scheduler pass changes nothing.
+	await signQuote(signature(quote.id));
+	await handleExpiry({ ...expired, extendedAt: null });
+	assert.equal(
+		(await db.query.quotes.findFirst({ where: eq(schema.quotes.id, quote.id) }))
+			?.status,
+		"accepted",
+	);
+});
+
+test("reliability: the server recomputes edited amounts and starts validity when the quote is sent", async () => {
+	const s = await scenario();
+	const db = getDb();
+	const draftQuote = await draft(s);
+	const { editDraftQuote } = await import("../../src/server/workflow");
+	const tampered = await editDraftQuote({
+		quoteId: draftQuote.id,
+		staffId: s.staff.id,
+		notes: null,
+		reviewToken: quoteReviewToken(draftQuote),
+		lineItems: [
+			{
+				...draftQuote.lineItems[0],
+				quantity: 2,
+				unitPriceSen: 70000,
+				amountSen: 1, // a browser can't set its own total
+			},
+		],
+	});
+	assert.equal(tampered.lineItems[0].amountSen, 140000);
+	assert.equal(tampered.subtotalSen, 140000);
+
+	// A draft prepared long ago: validity is counted from approval, not the draft.
+	await db
+		.update(schema.quotes)
+		.set({ validUntil: new Date(Date.now() - 86_400_000) })
+		.where(eq(schema.quotes.id, draftQuote.id));
+	const stale = await db.query.quotes.findFirst({
+		where: eq(schema.quotes.id, draftQuote.id),
+	});
+	assert.ok(stale);
+	const sent = await decideQuote({
+		quoteId: stale.id,
+		staffId: s.staff.id,
+		decision: "approved",
+		reviewToken: quoteReviewToken(stale),
+	});
+	const days = (sent.validUntil.getTime() - Date.now()) / 86_400_000;
+	assert.ok(days > 13.9 && days <= 14, `valid for ${days} days`);
+});
