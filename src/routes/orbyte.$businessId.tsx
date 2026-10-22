@@ -253,7 +253,12 @@ function Shell() {
 			)}
 			<div className="flex min-w-0 flex-1 flex-col">
 				<header className="flex items-center gap-3 border-b bg-card px-4 py-2.5 lg:hidden">
-					<button type="button" onClick={() => setOpen(true)}>
+					<button
+						type="button"
+						onClick={() => setOpen(true)}
+						aria-label="Open menu"
+						className="-m-2 rounded-md p-2 hover:bg-muted"
+					>
 						<Menu className="size-5" />
 					</button>
 					<img src="/orbyte-icon.png" alt="" className="size-6" />

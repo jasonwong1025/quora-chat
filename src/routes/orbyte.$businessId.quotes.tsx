@@ -156,7 +156,7 @@ function Quotes() {
 							<button
 								type="button"
 								onClick={() => navigate({ search: {} })}
-								className="text-sm text-primary"
+								className="-my-1 py-1 text-sm text-primary"
 							>
 								← Quotes
 							</button>

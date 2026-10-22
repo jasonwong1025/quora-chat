@@ -138,7 +138,7 @@ function JobPage() {
 		<div className="flex h-full min-h-0">
 			<div className="flex min-w-0 flex-1 flex-col">
 				<JobHeader job={j} onAsk={() => setAsking("")} />
-				<nav className="flex gap-1 overflow-x-auto border-b bg-card px-4">
+				<nav className="flex flex-wrap gap-x-1 border-b bg-card px-4 sm:flex-nowrap sm:overflow-x-auto">
 					{(
 						[
 							["handover", "Handover"],
@@ -675,13 +675,14 @@ function TasksTab({ job }: { job: JobDetail }) {
 							<button
 								type="button"
 								title={t.status === "done" ? "Mark not done" : "Mark done"}
+								aria-label={t.status === "done" ? "Mark not done" : "Mark done"}
 								onClick={() =>
 									update.mutate({
 										taskId: t.id,
 										status: t.status === "done" ? "todo" : "done",
 									})
 								}
-								className="mt-0.5"
+								className="-m-1.5 mt-[-0.25rem] rounded-md p-1.5 hover:bg-muted"
 							>
 								<Icon
 									className={cn(
@@ -739,8 +740,9 @@ function TasksTab({ job }: { job: JobDetail }) {
 							<button
 								type="button"
 								title="Delete task"
+								aria-label="Delete task"
 								onClick={() => remove.mutate({ taskId: t.id })}
-								className="mt-1.5 text-muted-foreground hover:text-foreground"
+								className="-m-1.5 mt-0 rounded-md p-1.5 text-muted-foreground hover:bg-muted hover:text-foreground"
 							>
 								<Trash2 className="size-3.5" />
 							</button>

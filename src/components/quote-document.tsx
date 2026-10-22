@@ -14,7 +14,7 @@ export function QuoteDocument({ q }: { q: QuoteDetail }) {
 					<p className="text-sm text-muted-foreground">{business?.address}</p>
 					<p className="text-sm text-muted-foreground">{business?.phone}</p>
 				</div>
-				<div className="text-right">
+				<div className="sm:text-right">
 					<p className="text-xl font-bold tracking-wide">QUOTATION</p>
 					<p className="font-medium">{q.number}</p>
 					<div className="mt-1">
@@ -33,8 +33,10 @@ export function QuoteDocument({ q }: { q: QuoteDetail }) {
 						</p>
 					)}
 				</div>
-				<div className="text-right text-muted-foreground">
-					<p>Date: {q.createdAt.toLocaleDateString("en-MY")}</p>
+				<div className="text-muted-foreground sm:text-right">
+					<p>
+						Date: {(q.decidedAt ?? q.createdAt).toLocaleDateString("en-MY")}
+					</p>
 					<p>Valid until: {q.validUntil.toLocaleDateString("en-MY")}</p>
 					{q.decidedBy && q.decidedAt && (
 						<p>

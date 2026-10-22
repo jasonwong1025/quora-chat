@@ -454,7 +454,7 @@ function Conversation({ row, onBack }: { row: InboxRow; onBack: () => void }) {
 				<button
 					type="button"
 					onClick={onBack}
-					className="shrink-0 text-sm text-primary md:hidden"
+					className="-my-1 shrink-0 py-1 text-sm text-primary md:hidden"
 				>
 					← Chats
 				</button>

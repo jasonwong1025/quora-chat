@@ -6,7 +6,7 @@ import { NextActionBanner } from "#/components/orbyte/next-action";
 import { RequirementBrief } from "#/components/orbyte/requirement-brief";
 import { useWorkspace } from "#/components/orbyte/workspace";
 import { QuoteEditor } from "#/components/quote-editor";
-import { StatusBadge } from "#/components/status-badge";
+import { quoteBadge, StatusBadge } from "#/components/status-badge";
 import { Button } from "#/components/ui/button";
 import { agreementChanges, quoteAgreementIssue } from "#/lib/agreements";
 import type { RequestRow } from "#/lib/types";
@@ -62,7 +62,15 @@ export function RequestDetail(props: {
 						{languageName[request.brief.language]}
 					</p>
 				</div>
-				<StatusBadge status={request.status} />
+				{/* Once signed, say so rather than the request's "approved" stage. */}
+				<StatusBadge
+					status={
+						request.quote?.status === "accepted" ||
+						request.quote?.status === "lost"
+							? quoteBadge(request.quote.status)
+							: request.status
+					}
+				/>
 			</div>
 
 			<NextActionBanner request={request} />

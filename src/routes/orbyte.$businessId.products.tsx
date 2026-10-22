@@ -499,12 +499,12 @@ function SortHeader(props: {
 			? ArrowUp
 			: ArrowDown;
 	return (
-		<th className="px-4 py-3 font-medium">
+		<th className="px-4 py-2 font-medium">
 			<button
 				type="button"
 				onClick={() => props.onSort(props.k)}
 				className={cn(
-					"inline-flex items-center gap-1 hover:text-foreground",
+					"-mx-1 inline-flex items-center gap-1 rounded px-1 py-1 hover:text-foreground",
 					active && "text-foreground",
 				)}
 			>
