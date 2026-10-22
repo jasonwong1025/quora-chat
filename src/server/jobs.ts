@@ -4,9 +4,9 @@
  * customer; questions go through sales approval and Quora Chat.
  */
 import { and, asc, count, desc, eq, inArray, sql } from "drizzle-orm";
-import { getDb, schema } from "#/db";
+import { type Database, getDb, schema } from "#/db";
 import type { BotAction, BotSource, Handover } from "#/db/schema";
-import { answerText, assess } from "#/lib/intake";
+import { answerText } from "#/lib/intake";
 import { formatMYR } from "#/lib/money";
 import {
 	answerJobQuestion,
@@ -16,8 +16,9 @@ import {
 	writeHandover,
 } from "./ai";
 import { emitOrbyteEvent } from "./orbyte";
+import { deliveryBaseline } from "./revisions";
+import { enqueueTask, finishTask, type TaskClaim } from "./tasks";
 
-type Db = ReturnType<typeof getDb>;
 type Quote = typeof schema.quotes.$inferSelect;
 type Request = typeof schema.quoteRequests.$inferSelect;
 type JobKind = (typeof schema.jobKind.enumValues)[number];
@@ -36,7 +37,7 @@ const kindCode: Record<JobKind, string> = {
 // --- Notifications (simulated Orbyte app + email) --------------------------------------
 
 export async function notify(
-	db: Db,
+	db: Database,
 	n: {
 		businessId: string;
 		staffIds: (string | null | undefined)[];
@@ -75,118 +76,189 @@ async function loadStaff(staffId: string, businessId: string) {
 }
 
 /** Called when the customer signs: client, job, PIC, then the AI writes the handover. */
-export async function startHandover(quote: Quote, request: Request) {
-	const db = getDb();
-	const existing = await db.query.jobs.findFirst({
-		where: eq(schema.jobs.quoteId, quote.id),
-	});
-	if (existing) return existing;
+export async function startHandover(
+	quote: Quote,
+	request: Request,
+	claim?: TaskClaim,
+) {
+	return getDb().transaction(async (db) => {
+		if (claim) await finishTask(db, claim);
+		if (quote.status !== "accepted")
+			throw new Error("Only a signed quotation can create a job");
+		await db
+			.select({ id: schema.businesses.id })
+			.from(schema.businesses)
+			.where(eq(schema.businesses.id, quote.businessId))
+			.for("update");
+		const existing = await db.query.jobs.findFirst({
+			where: eq(schema.jobs.quoteId, quote.id),
+		});
+		if (existing) {
+			if (!existing.handover)
+				await enqueueTask(db, "prepare_handover", existing.id, quote.id);
+			return existing;
+		}
+		const baseline = await deliveryBaseline(db, quote);
+		const [previousJob] = baseline?.job
+			? await db
+					.select()
+					.from(schema.jobs)
+					.where(eq(schema.jobs.id, baseline.job.id))
+					.for("update")
+			: [];
+		if (previousJob) {
+			if (
+				previousJob.kind !== "project" ||
+				["completed", "closed"].includes(previousJob.status)
+			)
+				throw new Error("This signed change needs a separate job review");
+			const [updated] = await db
+				.update(schema.jobs)
+				.set({
+					quoteId: quote.id,
+					requestId: request.id,
+					status: "preparing",
+					handover: null,
+					agreementReviewRequired: true,
+					updatedAt: new Date(),
+				})
+				.where(eq(schema.jobs.id, previousJob.id))
+				.returning();
+			await db
+				.update(schema.jobTasks)
+				.set({
+					status: "blocked",
+					note: `Signed scope changed (${quote.number}). Review this task against the new agreement.`,
+				})
+				.where(
+					and(
+						eq(schema.jobTasks.jobId, previousJob.id),
+						sql`${schema.jobTasks.status} <> 'done'`,
+					),
+				);
+			await emitOrbyteEvent(db, {
+				businessId: quote.businessId,
+				requestId: request.id,
+				type: "job.agreement_changed",
+				actor: "quora-chat",
+				summary: `${previousJob.number} updated to ${quote.number}; outstanding tasks require PIC review`,
+				payload: {
+					jobId: previousJob.id,
+					previousQuoteId: previousJob.quoteId,
+					previousHandover: previousJob.handover,
+				},
+			});
+			await enqueueTask(db, "prepare_handover", previousJob.id, quote.id);
+			return updated;
+		}
 
-	const [business, conversation] = await Promise.all([
-		db.query.businesses.findFirst({
-			where: eq(schema.businesses.id, quote.businessId),
-		}),
-		db.query.conversations.findFirst({
-			where: eq(schema.conversations.id, request.conversationId),
-		}),
-	]);
-	if (!business || !conversation) throw new Error("Business or chat missing");
+		const [business, conversation] = await Promise.all([
+			db.query.businesses.findFirst({
+				where: eq(schema.businesses.id, quote.businessId),
+			}),
+			db.query.conversations.findFirst({
+				where: eq(schema.conversations.id, request.conversationId),
+			}),
+		]);
+		if (!business || !conversation) throw new Error("Business or chat missing");
 
-	// Client: the company name from the brief, else the customer's name.
-	const companyAnswer = request.brief.general.company_name;
-	const clientName =
-		(companyAnswer && companyAnswer.source !== "skipped"
-			? companyAnswer.values[0]
-			: null) || conversation.customerName;
-	let client = await db.query.clients.findFirst({
-		where: and(
-			eq(schema.clients.businessId, business.id),
-			sql`lower(${schema.clients.name}) = ${clientName.toLowerCase()}`,
-		),
-	});
-	if (!client) {
-		[client] = await db
-			.insert(schema.clients)
+		// Client: the company name from the brief, else the customer's name.
+		const companyAnswer = (quote.requirementsSnapshot ?? request.brief).general
+			.company_name;
+		const clientName =
+			(companyAnswer && companyAnswer.source !== "skipped"
+				? companyAnswer.values[0]
+				: null) || conversation.customerName;
+		let client = await db.query.clients.findFirst({
+			where: and(
+				eq(schema.clients.businessId, business.id),
+				sql`lower(${schema.clients.name}) = ${clientName.toLowerCase()}`,
+			),
+		});
+		if (!client) {
+			[client] = await db
+				.insert(schema.clients)
+				.values({
+					businessId: business.id,
+					name: clientName,
+					contactName: conversation.customerName,
+					phone: conversation.customerPhone,
+				})
+				.returning();
+		}
+
+		// Kind: custom-priced → Project; any service → Job order; all stock → Delivery order.
+		const productIds = quote.lineItems.flatMap((l) =>
+			l.productId ? [l.productId] : [],
+		);
+		const products = productIds.length
+			? await db
+					.select()
+					.from(schema.products)
+					.where(inArray(schema.products.id, productIds))
+			: [];
+		const kind: JobKind = products.some((p) => p.pricingMode === "custom")
+			? "project"
+			: products.length > 0 && products.every((p) => p.type === "stock")
+				? "delivery_order"
+				: "job_order";
+
+		// PIC: the default for the first item's category, else the first approver.
+		const first = products.find((p) => p.id === productIds[0]);
+		const setting = first
+			? await db.query.categorySettings.findFirst({
+					where: and(
+						eq(schema.categorySettings.businessId, business.id),
+						eq(schema.categorySettings.category, first.category),
+					),
+				})
+			: undefined;
+		const fallback = await db.query.staff.findFirst({
+			where: and(
+				eq(schema.staff.businessId, business.id),
+				eq(schema.staff.canApprove, true),
+			),
+		});
+		const picId = setting?.defaultPicId ?? fallback?.id ?? null;
+
+		const [{ n }] = await db
+			.select({ n: count() })
+			.from(schema.jobs)
+			.where(
+				and(
+					eq(schema.jobs.businessId, business.id),
+					eq(schema.jobs.kind, kind),
+				),
+			);
+		const number = `${business.quotePrefix}-${kindCode[kind]}-${String(n + 1).padStart(4, "0")}`;
+		const firstName = first?.name ?? quote.lineItems[0]?.description ?? "Job";
+		const [job] = await db
+			.insert(schema.jobs)
 			.values({
+				number,
 				businessId: business.id,
-				name: clientName,
-				contactName: conversation.customerName,
-				phone: conversation.customerPhone,
+				clientId: client.id,
+				requestId: request.id,
+				quoteId: quote.id,
+				conversationId: conversation.id,
+				kind,
+				title: `${firstName} for ${client.name}`,
+				picId,
 			})
 			.returning();
-	}
 
-	// Kind: custom-priced → Project; any service → Job order; all stock → Delivery order.
-	const productIds = quote.lineItems.flatMap((l) =>
-		l.productId ? [l.productId] : [],
-	);
-	const products = productIds.length
-		? await db
-				.select()
-				.from(schema.products)
-				.where(inArray(schema.products.id, productIds))
-		: [];
-	const kind: JobKind = products.some((p) => p.pricingMode === "custom")
-		? "project"
-		: products.length > 0 && products.every((p) => p.type === "stock")
-			? "delivery_order"
-			: "job_order";
-
-	// PIC: the default for the first item's category, else the first approver.
-	const first = products.find((p) => p.id === productIds[0]);
-	const setting = first
-		? await db.query.categorySettings.findFirst({
-				where: and(
-					eq(schema.categorySettings.businessId, business.id),
-					eq(schema.categorySettings.category, first.category),
-				),
-			})
-		: undefined;
-	const fallback = await db.query.staff.findFirst({
-		where: and(
-			eq(schema.staff.businessId, business.id),
-			eq(schema.staff.canApprove, true),
-		),
-	});
-	const picId = setting?.defaultPicId ?? fallback?.id ?? null;
-
-	const [{ n }] = await db
-		.select({ n: count() })
-		.from(schema.jobs)
-		.where(
-			and(eq(schema.jobs.businessId, business.id), eq(schema.jobs.kind, kind)),
-		);
-	const number = `${business.quotePrefix}-${kindCode[kind]}-${String(n + 1).padStart(4, "0")}`;
-	const firstName = first?.name ?? quote.lineItems[0]?.description ?? "Job";
-	const [job] = await db
-		.insert(schema.jobs)
-		.values({
-			number,
+		await emitOrbyteEvent(db, {
 			businessId: business.id,
-			clientId: client.id,
 			requestId: request.id,
-			quoteId: quote.id,
-			conversationId: conversation.id,
-			kind,
-			title: `${firstName} for ${client.name}`,
-			picId,
-		})
-		.returning();
+			type: "job.created",
+			actor: "quora-chat",
+			summary: `${jobKindLabel[kind]} ${number} created for ${client.name}`,
+			payload: { jobId: job.id, quoteId: quote.id },
+		});
 
-	await emitOrbyteEvent(db, {
-		businessId: business.id,
-		requestId: request.id,
-		type: "job.created",
-		actor: "quora-chat",
-		summary: `${jobKindLabel[kind]} ${number} created for ${client.name}`,
-		payload: { jobId: job.id, quoteId: quote.id },
+		await enqueueTask(db, "prepare_handover", job.id, quote.id);
+		return job;
 	});
-
-	// The AI briefing takes a few seconds; don't make the customer wait for it.
-	void prepareHandover(job.id).catch((err) =>
-		console.error("[handover]", job.number, err),
-	);
-	return job;
 }
 
 /** Plain-text context about a job for the AI: brief, quote, files, chat. */
@@ -222,27 +294,31 @@ async function jobContext(jobId: string) {
 		]);
 	if (!business || !client || !request || !quote || !conversation)
 		throw new Error("Job context is incomplete");
-	const messages = await db.query.messages.findMany({
+	const allMessages = await db.query.messages.findMany({
 		where: eq(schema.messages.conversationId, conversation.id),
 		orderBy: asc(schema.messages.createdAt),
 		columns: { attachmentData: false },
 	});
+	const messages = allMessages.filter(
+		(m) =>
+			m.createdAt >= request.createdAt &&
+			(!quote.signedAt || m.createdAt <= quote.signedAt),
+	);
+	const agreedBrief = quote.requirementsSnapshot ?? request.brief;
 
-	const a = assess(request.brief, products, questions);
 	const brief = [
-		...a.items.flatMap(({ item, product, questions: qs }) => [
-			`${product?.name ?? item.rawText}${item.quantity ? ` × ${item.quantity}` : ""}`,
-			...qs
-				.filter((q) => item.answers[q.key])
-				.map(
-					(q) =>
-						`${product?.name ?? item.rawText}: ${q.label} → ${answerText(item.answers[q.key])}`,
-				),
+		...agreedBrief.items.flatMap((item) => [
+			`${item.productName ?? item.rawText}${item.quantity ? ` × ${item.quantity}` : ""}`,
+			...Object.entries(item.answers).map(
+				([key, answer]) =>
+					`${item.productName ?? item.rawText}: ${answer.label ?? questions.find((q) => q.key === key)?.label ?? key} → ${answerText(answer)}`,
+			),
 		]),
-		...a.general
-			.filter((q) => request.brief.general[q.key])
-			.map((q) => `${q.label} → ${answerText(request.brief.general[q.key])}`),
-		...request.brief.followUps
+		...Object.entries(agreedBrief.general).map(
+			([key, answer]) =>
+				`${answer.label ?? questions.find((q) => q.key === key)?.label ?? key} → ${answerText(answer)}`,
+		),
+		...agreedBrief.followUps
 			.filter((f) => f.answer)
 			.map((f) => `${f.question} → ${f.answer}`),
 	];
@@ -256,7 +332,7 @@ async function jobContext(jobId: string) {
 		customerName: conversation.customerName,
 		clientName: client.name,
 		jobKind: jobKindLabel[job.kind],
-		language: request.brief.language,
+		language: agreedBrief.language,
 		brief,
 		quote: [
 			...quote.lineItems.map(
@@ -300,69 +376,116 @@ async function jobContext(jobId: string) {
 	};
 }
 
-function fallbackHandover(context: JobContext): Handover {
-	return {
-		summary: `${context.clientName} signed for: ${context.quote[0] ?? "see quotation"}.`,
-		scope: context.quote.slice(0, -1),
-		requirements: [],
-		promises: [],
-		timeline: null,
-		watchOuts: [
-			"The AI briefing could not be written. Read the chat transcript.",
-		],
-		customerNotes: null,
-	};
+/** The AI writes the briefing and starting tasks, then the PIC is notified. */
+export async function buildHandover(
+	jobId: string,
+	claim: TaskClaim,
+	expectedQuoteId: string | null,
+) {
+	const { job, context, quote } = await jobContext(jobId);
+	if (
+		(expectedQuoteId && job.quoteId !== expectedQuoteId) ||
+		quote.status === "superseded"
+	) {
+		await getDb().transaction((db) => finishTask(db, claim));
+		return;
+	}
+	const draft = await writeHandover(context);
+	const { title: proposedTitle, tasks, ...handover } = draft;
+	const title = proposedTitle || job.title;
+	return getDb().transaction(async (db) => {
+		await finishTask(db, claim);
+		const [agreedQuote] = await db
+			.select()
+			.from(schema.quotes)
+			.where(eq(schema.quotes.id, job.quoteId))
+			.for("update");
+		if (!agreedQuote || agreedQuote.status !== "accepted") return;
+		const [current] = await db
+			.select()
+			.from(schema.jobs)
+			.where(eq(schema.jobs.id, jobId))
+			.for("update");
+		if (current.quoteId !== job.quoteId) return;
+		if (current.handover) return;
+		await db
+			.update(schema.jobs)
+			.set({
+				handover: current.agreementReviewRequired
+					? { ...handover, suggestedTasks: tasks }
+					: handover,
+				title,
+				status: "upcoming",
+				updatedAt: new Date(),
+			})
+			.where(eq(schema.jobs.id, job.id));
+		if (!current.agreementReviewRequired) {
+			await db
+				.delete(schema.jobTasks)
+				.where(
+					and(
+						eq(schema.jobTasks.jobId, job.id),
+						eq(schema.jobTasks.source, "ai"),
+					),
+				);
+			if (tasks.length)
+				await db.insert(schema.jobTasks).values(
+					tasks.slice(0, 10).map((t, position) => ({
+						jobId: job.id,
+						title: t,
+						position,
+						source: "ai",
+					})),
+				);
+		}
+		await emitOrbyteEvent(db, {
+			businessId: job.businessId,
+			requestId: job.requestId,
+			type: "job.handover_ready",
+			actor: "quora-chat",
+			summary: `Handover pack ready for ${job.number} (${tasks.length} starting tasks)`,
+			payload: { jobId: job.id },
+		});
+		await notify(db, {
+			businessId: job.businessId,
+			staffIds: [job.picId],
+			title: `New ${jobKindLabel[job.kind].toLowerCase()}: ${job.number}`,
+			body: `You're the PIC for "${title}". The handover pack and chat history are ready.`,
+			link: jobLink(job.businessId, job.id),
+		});
+	});
 }
 
-/** The AI writes the briefing and starting tasks, then the PIC is notified. */
+/** Manual retry requeues failed work; it never starts an untracked background promise. */
 export async function prepareHandover(jobId: string) {
-	const db = getDb();
-	const { job, context } = await jobContext(jobId);
-	let handover: Handover;
-	let title = job.title;
-	let tasks: string[] = [];
-	try {
-		const draft = await writeHandover(context);
-		const { title: t, tasks: ts, ...rest } = draft;
-		handover = rest;
-		title = t || title;
-		tasks = ts;
-	} catch (err) {
-		console.error("[handover] AI failed", err);
-		handover = fallbackHandover(context);
-	}
-	await db
-		.update(schema.jobs)
-		.set({ handover, title, status: "upcoming", updatedAt: new Date() })
-		.where(eq(schema.jobs.id, job.id));
-	await db
-		.delete(schema.jobTasks)
-		.where(
-			and(eq(schema.jobTasks.jobId, job.id), eq(schema.jobTasks.source, "ai")),
-		);
-	if (tasks.length)
-		await db.insert(schema.jobTasks).values(
-			tasks.slice(0, 10).map((t, position) => ({
-				jobId: job.id,
-				title: t,
-				position,
-				source: "ai",
-			})),
-		);
-	await emitOrbyteEvent(db, {
-		businessId: job.businessId,
-		requestId: job.requestId,
-		type: "job.handover_ready",
-		actor: "quora-chat",
-		summary: `Handover pack ready for ${job.number} (${tasks.length} starting tasks)`,
-		payload: { jobId: job.id },
-	});
-	await notify(db, {
-		businessId: job.businessId,
-		staffIds: [job.picId],
-		title: `New ${jobKindLabel[job.kind].toLowerCase()}: ${job.number}`,
-		body: `You're the PIC for "${title}". The handover pack and chat history are ready.`,
-		link: jobLink(job.businessId, job.id),
+	return getDb().transaction(async (db) => {
+		const [job] = await db
+			.select()
+			.from(schema.jobs)
+			.where(eq(schema.jobs.id, jobId));
+		if (!job) throw new Error("Job not found");
+		if (job.handover)
+			throw new Error("This job already has its agreed handover");
+		await enqueueTask(db, "prepare_handover", jobId, job.quoteId);
+		await db
+			.update(schema.workflowTasks)
+			.set({
+				status: "pending",
+				attempts: 0,
+				runAfter: new Date(),
+				lastError: null,
+				claimToken: null,
+				lockedUntil: null,
+			})
+			.where(
+				and(
+					eq(
+						schema.workflowTasks.key,
+						`prepare_handover:${jobId}:${job.quoteId}`,
+					),
+					eq(schema.workflowTasks.status, "failed"),
+				),
+			);
 	});
 }
 
@@ -373,78 +496,148 @@ export async function updateJob(input: {
 	staffId: string;
 	status?: "upcoming" | "active" | "completed" | "closed";
 	picId?: string | null;
+	acknowledgeAgreement?: boolean;
 }) {
-	const db = getDb();
-	const job = await db.query.jobs.findFirst({
-		where: eq(schema.jobs.id, input.jobId),
-	});
-	if (!job) throw new Error("Job not found");
-	const member = await loadStaff(input.staffId, job.businessId);
-	const patch: Partial<typeof schema.jobs.$inferInsert> = {
-		updatedAt: new Date(),
-	};
-
-	if (input.picId !== undefined && input.picId !== job.picId) {
-		const pic = input.picId
-			? await loadStaff(input.picId, job.businessId)
-			: null;
-		patch.picId = pic?.id ?? null;
-		await emitOrbyteEvent(db, {
-			businessId: job.businessId,
-			requestId: job.requestId,
-			type: "job.assigned",
-			actor: member.name,
-			summary: `${member.name} assigned ${job.number} to ${pic?.name ?? "nobody"}`,
+	return getDb().transaction(async (db) => {
+		const [job] = await db
+			.select()
+			.from(schema.jobs)
+			.where(eq(schema.jobs.id, input.jobId))
+			.for("update");
+		if (!job) throw new Error("Job not found");
+		const member = await loadStaff(input.staffId, job.businessId);
+		const currentQuote = await db.query.quotes.findFirst({
+			where: eq(schema.quotes.id, job.quoteId),
 		});
-		if (pic && pic.id !== member.id)
-			await notify(db, {
+		if (currentQuote?.status === "superseded")
+			throw new Error("A signed revision is waiting for its updated handover");
+		const patch: Partial<typeof schema.jobs.$inferInsert> = {
+			updatedAt: new Date(),
+		};
+		if (input.acknowledgeAgreement) {
+			if (member.id !== job.picId && !member.canApprove)
+				throw new Error(
+					"Only the PIC or an approver can acknowledge the revised agreement",
+				);
+			if (!job.handover)
+				throw new Error(
+					"Wait for the revised handover before reviewing the agreement",
+				);
+			patch.agreementReviewRequired = false;
+			await emitOrbyteEvent(db, {
 				businessId: job.businessId,
-				staffIds: [pic.id],
-				title: `${job.number} assigned to you`,
-				body: `${member.name} made you the PIC for "${job.title}".`,
-				link: jobLink(job.businessId, job.id),
+				requestId: job.requestId,
+				type: "job.agreement_reviewed",
+				actor: member.name,
+				summary: `${member.name} reviewed the revised agreement and tasks for ${job.number}`,
 			});
-	}
-	if (input.status && input.status !== job.status) {
-		if (job.status === "preparing")
-			throw new Error("Wait for the handover pack to finish");
-		patch.status = input.status;
-		patch.completedAt = input.status === "completed" ? new Date() : null;
-		await emitOrbyteEvent(db, {
-			businessId: job.businessId,
-			requestId: job.requestId,
-			type: "job.status_changed",
-			actor: member.name,
-			summary: `${job.number} marked ${input.status} by ${member.name}`,
-		});
-		if (input.status === "completed") await deliverStock(job, member.name);
-	}
-	const [row] = await db
-		.update(schema.jobs)
-		.set(patch)
-		.where(eq(schema.jobs.id, job.id))
-		.returning();
-	return row;
+		}
+
+		if (input.picId !== undefined && input.picId !== job.picId) {
+			const pic = input.picId
+				? await loadStaff(input.picId, job.businessId)
+				: null;
+			patch.picId = pic?.id ?? null;
+			await emitOrbyteEvent(db, {
+				businessId: job.businessId,
+				requestId: job.requestId,
+				type: "job.assigned",
+				actor: member.name,
+				summary: `${member.name} assigned ${job.number} to ${pic?.name ?? "nobody"}`,
+			});
+			if (pic && pic.id !== member.id)
+				await notify(db, {
+					businessId: job.businessId,
+					staffIds: [pic.id],
+					title: `${job.number} assigned to you`,
+					body: `${member.name} made you the PIC for "${job.title}".`,
+					link: jobLink(job.businessId, job.id),
+				});
+		}
+		if (input.status && input.status !== job.status) {
+			if (
+				job.agreementReviewRequired &&
+				!input.acknowledgeAgreement &&
+				["active", "completed", "closed"].includes(input.status)
+			)
+				throw new Error(
+					"Review the revised agreement and outstanding tasks before resuming work",
+				);
+			if (job.status === "preparing")
+				throw new Error("Wait for the handover pack to finish");
+			patch.status = input.status;
+			patch.completedAt = input.status === "completed" ? new Date() : null;
+			await emitOrbyteEvent(db, {
+				businessId: job.businessId,
+				requestId: job.requestId,
+				type: "job.status_changed",
+				actor: member.name,
+				summary: `${job.number} marked ${input.status} by ${member.name}`,
+			});
+			if (input.status === "completed")
+				await deliverStock(db, job, member.name);
+		}
+		const [row] = await db
+			.update(schema.jobs)
+			.set(patch)
+			.where(eq(schema.jobs.id, job.id))
+			.returning();
+		return row;
+	});
 }
 
 /** Completing a job hands over its reserved stock (it leaves inventory). */
 async function deliverStock(
+	db: Database,
 	job: typeof schema.jobs.$inferSelect,
 	actor: string,
 ) {
-	const db = getDb();
 	const quote = await db.query.quotes.findFirst({
 		where: eq(schema.quotes.id, job.quoteId),
 	});
-	if (!quote) return;
-	for (const line of quote.lineItems) {
-		if (!line.productId) continue;
-		const p = await db.query.products.findFirst({
-			where: eq(schema.products.id, line.productId),
-		});
-		if (!p || p.type !== "stock") continue;
-		const n = Math.min(p.stockReserved, line.quantity);
-		if (n <= 0) continue;
+	const ids =
+		quote?.lineItems.flatMap((l) => (l.productId ? [l.productId] : [])) ?? [];
+	const stock = ids.length
+		? await db
+				.select({ id: schema.products.id })
+				.from(schema.products)
+				.where(
+					and(
+						inArray(schema.products.id, ids),
+						eq(schema.products.type, "stock"),
+					),
+				)
+		: [];
+	const recorded = await db
+		.select()
+		.from(schema.stockReservations)
+		.where(eq(schema.stockReservations.quoteId, job.quoteId));
+	if (stock.some((p) => !recorded.some((r) => r.productId === p.id)))
+		throw new Error(
+			"This legacy job needs its stock reservations reconciled before completion",
+		);
+	const reservations = await db
+		.select()
+		.from(schema.stockReservations)
+		.where(
+			and(
+				eq(schema.stockReservations.quoteId, job.quoteId),
+				sql`${schema.stockReservations.deliveredAt} IS NULL`,
+			),
+		)
+		.orderBy(schema.stockReservations.productId)
+		.for("update");
+	for (const reservation of reservations) {
+		const [p] = await db
+			.select()
+			.from(schema.products)
+			.where(eq(schema.products.id, reservation.productId))
+			.for("update");
+		const n = reservation.quantity;
+		if (!p || p.stockReserved < n || p.stockOnHand < n)
+			throw new Error(
+				"Reserved stock needs reconciliation before this job can be completed",
+			);
 		await db
 			.update(schema.products)
 			.set({
@@ -452,6 +645,10 @@ async function deliverStock(
 				stockReserved: sql`${schema.products.stockReserved} - ${n}`,
 			})
 			.where(eq(schema.products.id, p.id));
+		await db
+			.update(schema.stockReservations)
+			.set({ deliveredAt: new Date() })
+			.where(eq(schema.stockReservations.id, reservation.id));
 		await emitOrbyteEvent(db, {
 			businessId: job.businessId,
 			requestId: job.requestId,
@@ -506,15 +703,44 @@ export async function updateTask(input: {
 	note?: string | null;
 	title?: string;
 }) {
-	const db = getDb();
-	const { taskId, ...patch } = input;
-	const [row] = await db
-		.update(schema.jobTasks)
-		.set(patch)
-		.where(eq(schema.jobTasks.id, taskId))
-		.returning();
-	if (!row) throw new Error("Task not found");
-	return row;
+	return getDb().transaction(async (db) => {
+		const task = await db.query.jobTasks.findFirst({
+			where: eq(schema.jobTasks.id, input.taskId),
+		});
+		if (!task) throw new Error("Task not found");
+		const [job] = await db
+			.select()
+			.from(schema.jobs)
+			.where(eq(schema.jobs.id, task.jobId))
+			.for("update");
+		const currentQuote = await db.query.quotes.findFirst({
+			where: eq(schema.quotes.id, job.quoteId),
+		});
+		if (
+			currentQuote?.status === "superseded" &&
+			input.status &&
+			["active", "done"].includes(input.status)
+		)
+			throw new Error(
+				"Wait for the revised agreement handover before progressing these tasks",
+			);
+		if (
+			job.agreementReviewRequired &&
+			input.status &&
+			["active", "done"].includes(input.status)
+		)
+			throw new Error(
+				"Review the revised agreement before progressing these tasks",
+			);
+		const { taskId, ...patch } = input;
+		const [row] = await db
+			.update(schema.jobTasks)
+			.set(patch)
+			.where(eq(schema.jobTasks.id, taskId))
+			.returning();
+		if (!row) throw new Error("Task not found");
+		return row;
+	});
 }
 
 // --- The PIC's chatbot ----------------------------------------------------------------------
@@ -788,7 +1014,7 @@ export async function matchRelayAnswer(input: {
 		reply: input.message.body,
 		hasAttachment: Boolean(input.message.attachment),
 	}).catch(() => null);
-	if (!result?.answers || !result.answer) return null;
+	if (!result?.answers || !result.answer || result.changesScope) return null;
 
 	const [row] = await db
 		.update(schema.relays)

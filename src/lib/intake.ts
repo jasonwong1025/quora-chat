@@ -75,15 +75,58 @@ export function isVisible(q: Question, answers: Record<string, Answer>) {
 	);
 }
 
-export function isAnswered(a: Answer | undefined) {
+const uncertain =
+	/^(?:\(?no clear answer\)?|not sure|unsure|unknown|don'?t know|i don'?t know|tbd|to be confirmed|tak pasti|tidak pasti|tak tahu|tidak tahu|不知道|不确定|不確定|待定)[.!。！]?$/i;
+
+export function answerIssue(
+	a: Answer | undefined,
+	q?: Pick<Question, "type" | "options">,
+): string | null {
+	if (!a) return "Not answered";
+	if (a.source === "skipped")
+		return a.waiverReason?.trim() ? null : "Waiver needs a reason";
+	if (a.state === "conflicting")
+		return "Conflicting details need clarification";
+	if (a.state === "ambiguous") return "Answer needs clarification";
+	const values = a.values.map((v) => v.trim()).filter(Boolean);
+	if (!values.length || values.some((v) => uncertain.test(v)))
+		return "Answer is still uncertain";
+	if (
+		q?.type === "number" &&
+		values.some((v) => !/\d/u.test(v) || /(?:^|\s)-\d/u.test(v))
+	)
+		return "A number or numeric range is needed";
+	if (q && ["single", "multi", "yes_no"].includes(q.type)) {
+		const options = q.type === "yes_no" ? ["yes", "no"] : q.options;
+		if (
+			(q.type !== "multi" && values.length !== 1) ||
+			values.some((v) => !options.some((o) => same(o, v)))
+		)
+			return "Choose from the available options";
+	}
+	if (q?.type === "file" && !a.fileMessageId)
+		return "Attach a file or explicitly waive this requirement";
+	return null;
+}
+
+export function isAnswered(
+	a: Answer | undefined,
+	q?: Pick<Question, "type" | "options">,
+) {
+	return answerIssue(a, q) === null;
+}
+
+export function followUpResolved(f: FollowUp) {
 	return Boolean(
-		a && (a.source === "skipped" || a.values.some((v) => v.trim() !== "")),
+		(f.waivedBy && f.waiverReason?.trim()) ||
+			(f.answer?.trim() && !uncertain.test(f.answer.trim())),
 	);
 }
 
 export function answerText(a: Answer | undefined) {
 	if (!a) return "";
-	if (a.source === "skipped") return "(skipped)";
+	if (a.source === "skipped")
+		return `(waived: ${a.waiverReason ?? "no reason recorded"})`;
 	return a.values.join(", ");
 }
 
@@ -202,7 +245,7 @@ export function assess(
 			isVisible(q, item.answers),
 		);
 		for (const q of visible) {
-			const done = isAnswered(item.answers[q.key]);
+			const done = isAnswered(item.answers[q.key], q);
 			if (q.required) {
 				requiredTotal++;
 				if (done) requiredAnswered++;
@@ -223,7 +266,7 @@ export function assess(
 	}
 
 	for (const f of brief.followUps) {
-		if (f.answer !== null) continue;
+		if (followUpResolved(f)) continue;
 		missing.push({
 			id: missingId.followUp(f.id),
 			kind: "follow_up",
@@ -238,7 +281,7 @@ export function assess(
 	// Business-wide questions only once we know what they want.
 	if (brief.items.length > 0) {
 		for (const q of general) {
-			const done = isAnswered(brief.general[q.key]);
+			const done = isAnswered(brief.general[q.key], q);
 			if (q.required) {
 				requiredTotal++;
 				if (done) requiredAnswered++;

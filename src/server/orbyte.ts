@@ -2,10 +2,8 @@
  * Simulated Orbyte workflow hooks. In production these would publish to the
  * Orbyte event bus; for the demo they write activity records to our database.
  */
-import type { getDb } from "#/db";
+import type { Database } from "#/db";
 import { schema } from "#/db";
-
-type Db = ReturnType<typeof getDb>;
 
 export type OrbyteEventType =
 	| "quote.request.received"
@@ -14,6 +12,7 @@ export type OrbyteEventType =
 	| "quote.request.confirmation_requested"
 	| "quote.request.confirmed"
 	| "quote.brief.edited"
+	| "quote.draft.outdated"
 	| "quote.revision.requested"
 	| "quote.superseded"
 	| "quote.request.flagged_for_review"
@@ -38,6 +37,8 @@ export type OrbyteEventType =
 	| "job.assigned"
 	| "job.status_changed"
 	| "job.task_added"
+	| "job.agreement_changed"
+	| "job.agreement_reviewed"
 	| "relay.requested"
 	| "relay.sent"
 	| "relay.rejected"
@@ -46,7 +47,7 @@ export type OrbyteEventType =
 	| "stock.adjusted";
 
 export async function emitOrbyteEvent(
-	db: Db,
+	db: Database,
 	event: {
 		businessId: string;
 		requestId?: string | null;

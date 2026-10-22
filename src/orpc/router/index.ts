@@ -239,15 +239,22 @@ const listRequests = os.input(businessInput).handler(async ({ input }) => {
 				.from(schema.quotes)
 				.where(inArray(schema.quotes.requestId, ids))
 		: [];
-	return requests.map(({ request, customerName }) => ({
-		...request,
-		customerName,
-		quote:
+	return requests.map(({ request, customerName }) => {
+		const quote =
 			quotes
 				.filter((q) => q.requestId === request.id)
 				.sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())[0] ??
-			null,
-	}));
+			null;
+		return {
+			...request,
+			customerName,
+			quote,
+			baselineQuote:
+				quotes.find(
+					(q) => q.id === (request.brief.revisionOf ?? quote?.supersedesId),
+				) ?? null,
+		};
+	});
 });
 
 const getQuote = os
@@ -302,6 +309,7 @@ const updateQuote = os
 			staffId: z.string(),
 			lineItems: z.array(lineItemSchema),
 			notes: z.string().nullable(),
+			reviewToken: z.string(),
 		}),
 	)
 	.handler(({ input }) => editDraftQuote(input).catch(fail));
@@ -312,6 +320,7 @@ const decide = os
 			quoteId: z.string(),
 			staffId: z.string(),
 			decision: z.enum(["approved", "rejected"]),
+			reviewToken: z.string(),
 			reason: z.string().optional(),
 		}),
 	)
@@ -1070,6 +1079,7 @@ const briefEdit = z.discriminatedUnion("kind", [
 		kind: z.literal("skip"),
 		itemId: z.string().nullable(),
 		key: z.string(),
+		reason: z.string().trim().min(1).max(500),
 	}),
 	z.object({
 		kind: z.literal("clear"),
@@ -1087,7 +1097,11 @@ const briefEdit = z.discriminatedUnion("kind", [
 		productId: z.string(),
 	}),
 	z.object({ kind: z.literal("add_follow_up"), question: z.string().max(300) }),
-	z.object({ kind: z.literal("remove_follow_up"), id: z.string() }),
+	z.object({
+		kind: z.literal("remove_follow_up"),
+		id: z.string(),
+		reason: z.string().trim().min(1).max(500),
+	}),
 	z.object({
 		kind: z.literal("answer_follow_up"),
 		id: z.string(),
@@ -1097,7 +1111,12 @@ const briefEdit = z.discriminatedUnion("kind", [
 
 const editRequestBrief = os
 	.input(
-		z.object({ requestId: z.string(), staffId: z.string(), edit: briefEdit }),
+		z.object({
+			requestId: z.string(),
+			staffId: z.string(),
+			edit: briefEdit,
+			expectedVersion: z.number().int().positive(),
+		}),
 	)
 	.handler(({ input }) => editBrief(input).catch(fail));
 
@@ -1205,10 +1224,18 @@ const getJob = os
 					.where(eq(schema.staff.businessId, job.businessId)),
 			]);
 		if (!client || !quote || !request) throw new ORPCError("NOT_FOUND");
+		const handoverTask = await db.query.workflowTasks.findFirst({
+			where: eq(
+				schema.workflowTasks.key,
+				`prepare_handover:${job.id}:${job.quoteId}`,
+			),
+			columns: { status: true, attempts: true },
+		});
 		const nameOf = (id: string | null) =>
 			staff.find((s) => s.id === id)?.name ?? null;
 		return {
 			...job,
+			handoverTask: handoverTask ?? null,
 			client,
 			quote: {
 				id: quote.id,
@@ -1221,7 +1248,7 @@ const getJob = os
 				signerName: quote.signerName,
 				signedAt: quote.signedAt,
 			},
-			brief: request.brief,
+			brief: quote.requirementsSnapshot ?? request.brief,
 			tasks,
 			chat,
 			relays: relays.map((r) => ({
@@ -1240,6 +1267,7 @@ const updateJobInput = os
 			staffId: z.string(),
 			status: jobStatusInput.optional(),
 			picId: z.string().nullable().optional(),
+			acknowledgeAgreement: z.boolean().optional(),
 		}),
 	)
 	.handler(({ input }) => updateJob(input).catch(fail));

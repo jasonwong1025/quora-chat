@@ -22,9 +22,12 @@ import { useWorkspace } from "#/components/orbyte/workspace";
 import { Button } from "#/components/ui/button";
 import { Input } from "#/components/ui/input";
 import type { Answer, FollowUp } from "#/db/schema";
+import { quoteAgreementIssue } from "#/lib/agreements";
 import {
+	answerIssue,
 	answerText,
 	assess,
+	followUpResolved,
 	type ItemView,
 	isAnswered,
 	type Question,
@@ -58,8 +61,10 @@ export function RequirementBrief({ request }: { request: RequestRow }) {
 	const brief = request.brief;
 	const a = assess(brief, business.products, business.questions);
 	const open = OPEN.includes(request.status);
-	const drafted =
-		request.status === "draft_ready" || request.status === "needs_review";
+	const drafted = Boolean(
+		request.quote?.status === "draft" &&
+			!quoteAgreementIssue(request.quote, request),
+	);
 	const pct = a.requiredTotal
 		? Math.round((a.requiredAnswered / a.requiredTotal) * 100)
 		: 0;
@@ -88,6 +93,7 @@ export function RequirementBrief({ request }: { request: RequestRow }) {
 					requestId: request.id,
 					staffId: me?.id ?? "",
 					edit: e,
+					expectedVersion: request.briefVersion,
 				}),
 			success,
 		);
@@ -101,16 +107,18 @@ export function RequirementBrief({ request }: { request: RequestRow }) {
 			: request.status === "confirming"
 				? "All details in. Waiting for the customer to confirm the summary."
 				: drafted
-					? "Customer confirmed. The draft quotation is below."
-					: request.status === "approved"
-						? "Quotation sent."
-						: "Closed.";
+					? "The draft captures the requirements below. Review it before sending."
+					: open
+						? "Review the requirements and prepare a current draft."
+						: request.status === "approved"
+							? "Quotation sent."
+							: "Closed.";
 
 	return (
 		<section className="space-y-3">
 			<div className="flex items-center justify-between gap-2">
 				<h3 className="text-xs font-semibold tracking-wide text-muted-foreground uppercase">
-					Requirement brief
+					Requirement brief · version {request.briefVersion}
 				</h3>
 				{a.requiredTotal > 0 && (
 					<span className="text-xs text-muted-foreground tabular-nums">
@@ -165,7 +173,9 @@ export function RequirementBrief({ request }: { request: RequestRow }) {
 								onSave={(values) =>
 									edit({ kind: "answer", itemId: null, key: q.key, values })
 								}
-								onSkip={() => edit({ kind: "skip", itemId: null, key: q.key })}
+								onSkip={(reason) =>
+									edit({ kind: "skip", itemId: null, key: q.key, reason })
+								}
 								onClear={() =>
 									edit({ kind: "clear", itemId: null, key: q.key })
 								}
@@ -187,7 +197,9 @@ export function RequirementBrief({ request }: { request: RequestRow }) {
 								onAnswer={(answer) =>
 									edit({ kind: "answer_follow_up", id: f.id, answer })
 								}
-								onRemove={() => edit({ kind: "remove_follow_up", id: f.id })}
+								onRemove={(reason) =>
+									edit({ kind: "remove_follow_up", id: f.id, reason })
+								}
 							/>
 						))}
 					</ul>
@@ -197,6 +209,7 @@ export function RequirementBrief({ request }: { request: RequestRow }) {
 			{open && (
 				<StaffControls
 					busy={actions.ask.isPending || actions.draft.isPending}
+					canDraft={Boolean(me?.canApprove && !a.blocking.length)}
 					asking={actions.ask.isPending}
 					drafting={actions.draft.isPending}
 					drafted={drafted}
@@ -371,8 +384,13 @@ function ItemCard(props: {
 									values,
 								})
 							}
-							onSkip={() =>
-								props.onEdit({ kind: "skip", itemId: item.id, key: q.key })
+							onSkip={(reason) =>
+								props.onEdit({
+									kind: "skip",
+									itemId: item.id,
+									key: q.key,
+									reason,
+								})
 							}
 							onClear={() =>
 								props.onEdit({ kind: "clear", itemId: item.id, key: q.key })
@@ -392,7 +410,7 @@ function ItemCard(props: {
 
 function sourceText(a: Answer) {
 	const at = clock(new Date(a.at));
-	if (a.source === "skipped") return `skipped by ${a.by ?? "staff"} · ${at}`;
+	if (a.source === "skipped") return `waived by ${a.by ?? "staff"} · ${at}`;
 	if (a.source === "staff") return `${a.by ?? "staff"} · ${at}`;
 	return `customer · ${at}`;
 }
@@ -402,12 +420,14 @@ function AnswerRow(props: {
 	answer: Answer | undefined;
 	open: boolean;
 	onSave: (values: string[]) => Promise<boolean>;
-	onSkip: () => Promise<boolean>;
+	onSkip: (reason: string) => Promise<boolean>;
 	onClear: () => Promise<boolean>;
 }) {
 	const { question: q, answer } = props;
 	const [editing, setEditing] = useState(false);
-	const done = isAnswered(answer);
+	const [waiving, setWaiving] = useState(false);
+	const { me } = useWorkspace();
+	const done = isAnswered(answer, q);
 	return (
 		<li
 			className={cn(
@@ -466,11 +486,16 @@ function AnswerRow(props: {
 							)}
 							<span className="text-[10px] text-muted-foreground">
 								{sourceText(answer)}
+								{answer.waiverReason && ` · ${answer.waiverReason}`}
 							</span>
 						</p>
 					) : (
 						<p className="text-xs text-muted-foreground italic">
-							{q.type === "file" ? "No file yet" : "Not answered yet"}
+							{answer
+								? `${answerText(answer)} — ${answerIssue(answer, q)}`
+								: q.type === "file"
+									? "No file yet"
+									: "Not answered yet"}
 						</p>
 					)}
 				</div>
@@ -481,8 +506,11 @@ function AnswerRow(props: {
 								<Pencil />
 							</IconButton>
 						)}
-						{!done && (
-							<IconButton title="Skip: don't ask this" onClick={props.onSkip}>
+						{!done && me?.canApprove && (
+							<IconButton
+								title="Waive with a reason"
+								onClick={() => setWaiving(true)}
+							>
 								<SkipForward />
 							</IconButton>
 						)}
@@ -494,6 +522,14 @@ function AnswerRow(props: {
 					</div>
 				)}
 			</div>
+			{waiving && (
+				<WaiverEditor
+					onCancel={() => setWaiving(false)}
+					onSave={async (reason) => {
+						if (await props.onSkip(reason)) setWaiving(false);
+					}}
+				/>
+			)}
 		</li>
 	);
 }
@@ -610,16 +646,18 @@ function FollowUpRow(props: {
 	followUp: FollowUp;
 	open: boolean;
 	onAnswer: (answer: string) => Promise<boolean>;
-	onRemove: () => Promise<boolean>;
+	onRemove: (reason: string) => Promise<boolean>;
 }) {
 	const f = props.followUp;
 	const [editing, setEditing] = useState(false);
 	const [text, setText] = useState(f.answer ?? "");
+	const [waiving, setWaiving] = useState(false);
+	const { me } = useWorkspace();
 	return (
 		<li
 			className={cn(
 				"px-3 py-2 text-sm",
-				f.answer === null && "bg-status-clarify/5",
+				!followUpResolved(f) && "bg-status-clarify/5",
 			)}
 		>
 			<div className="flex items-start gap-2">
@@ -656,6 +694,10 @@ function FollowUpRow(props: {
 								Save
 							</Button>
 						</form>
+					) : f.waivedBy ? (
+						<p className="text-xs text-muted-foreground">
+							Waived by {f.waivedBy}: {f.waiverReason}
+						</p>
 					) : f.answer ? (
 						<p className="font-medium">{f.answer}</p>
 					) : (
@@ -669,18 +711,62 @@ function FollowUpRow(props: {
 						<IconButton title="Answer it" onClick={() => setEditing(true)}>
 							<Pencil />
 						</IconButton>
-						<IconButton title="Remove" onClick={props.onRemove}>
-							<X />
-						</IconButton>
+						{me?.canApprove && !f.waivedBy && (
+							<IconButton
+								title="Waive with a reason"
+								onClick={() => setWaiving(true)}
+							>
+								<SkipForward />
+							</IconButton>
+						)}
 					</div>
 				)}
 			</div>
+			{waiving && (
+				<WaiverEditor
+					onCancel={() => setWaiving(false)}
+					onSave={async (reason) => {
+						if (await props.onRemove(reason)) setWaiving(false);
+					}}
+				/>
+			)}
 		</li>
+	);
+}
+
+function WaiverEditor(props: {
+	onSave: (reason: string) => void;
+	onCancel: () => void;
+}) {
+	const [reason, setReason] = useState("");
+	return (
+		<form
+			className="mt-2 flex gap-2"
+			onSubmit={(e) => {
+				e.preventDefault();
+				if (reason.trim()) props.onSave(reason.trim());
+			}}
+		>
+			<Input
+				aria-label="Reason for waiving this requirement"
+				placeholder="Why can this requirement be waived?"
+				value={reason}
+				onChange={(e) => setReason(e.target.value)}
+				maxLength={500}
+			/>
+			<Button size="sm" disabled={!reason.trim()}>
+				Waive
+			</Button>
+			<Button type="button" size="sm" variant="ghost" onClick={props.onCancel}>
+				Cancel
+			</Button>
+		</form>
 	);
 }
 
 function StaffControls(props: {
 	busy: boolean;
+	canDraft: boolean;
 	asking: boolean;
 	drafting: boolean;
 	drafted: boolean;
@@ -733,7 +819,7 @@ function StaffControls(props: {
 						size="sm"
 						variant="outline"
 						className="bg-card"
-						disabled={props.busy}
+						disabled={props.busy || !props.canDraft}
 						onClick={props.onDraft}
 					>
 						{props.drafting ? (
@@ -748,7 +834,8 @@ function StaffControls(props: {
 			<p className="flex items-start gap-1.5 text-[11px] text-muted-foreground">
 				<MessageCircleQuestion className="mt-px size-3.5 shrink-0" />
 				"Ask now" sends the AI's next question (or the recap) without waiting
-				for the customer. "Draft now" skips what's left and drafts from what we
+				for the customer. An approver can use "Draft now" once required details
+				are resolved or explicitly waived. It prepares a draft from what we
 				know.
 			</p>
 		</div>

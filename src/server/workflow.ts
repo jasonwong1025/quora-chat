@@ -7,7 +7,7 @@
  * answers out of messages and words the replies.
  */
 import { and, asc, count, desc, eq, inArray, sql } from "drizzle-orm";
-import { getDb, schema } from "#/db";
+import { type Database, getDb, schema } from "#/db";
 import type {
 	Answer,
 	Attachment,
@@ -17,12 +17,15 @@ import type {
 	LineItem,
 	ThoughtStep,
 } from "#/db/schema";
+import { quoteAgreementIssue, quoteReviewToken } from "#/lib/agreements";
 import {
 	type Assessment,
+	answerIssue,
 	answerText,
 	assess,
 	businessQuestions,
 	emptyBrief,
+	followUpResolved,
 	type IntakeProduct,
 	type Missing,
 	nextToAsk,
@@ -39,9 +42,12 @@ import {
 	readTurn,
 	writeReply,
 } from "./ai";
-import { matchRelayAnswer, startHandover } from "./jobs";
+import { matchRelayAnswer } from "./jobs";
 import { emitOrbyteEvent } from "./orbyte";
 import { formatMYR, priceBrief, totals } from "./pricing";
+import { createRequest, saveRequest, snapshotBrief } from "./requirements";
+import { deliveryBaseline } from "./revisions";
+import { enqueueTask } from "./tasks";
 
 type RequestStatus = (typeof schema.requestStatus.enumValues)[number];
 
@@ -114,22 +120,46 @@ async function findOpenRequest(conversationId: string) {
 /** The latest request whose quote was sent but not signed yet, so it can still be revised. */
 async function findSentQuote(conversationId: string) {
 	const db = getDb();
-	const request = await db.query.quoteRequests.findFirst({
-		where: and(
-			eq(schema.quoteRequests.conversationId, conversationId),
-			eq(schema.quoteRequests.status, "approved"),
-		),
-		orderBy: desc(schema.quoteRequests.updatedAt),
-	});
-	if (!request) return null;
-	const quote = await db.query.quotes.findFirst({
-		where: and(
-			eq(schema.quotes.requestId, request.id),
-			eq(schema.quotes.status, "approved"),
-		),
-		orderBy: desc(schema.quotes.createdAt),
-	});
-	if (!quote || quote.validUntil < new Date()) return null;
+	const [found] = await db
+		.select({ quote: schema.quotes, request: schema.quoteRequests })
+		.from(schema.quotes)
+		.innerJoin(
+			schema.quoteRequests,
+			eq(schema.quoteRequests.id, schema.quotes.requestId),
+		)
+		.where(
+			and(
+				eq(schema.quoteRequests.conversationId, conversationId),
+				inArray(schema.quotes.status, ["approved", "accepted"]),
+				sql`(${schema.quotes.status} = 'accepted' OR ${schema.quotes.validUntil} >= now())`,
+			),
+		)
+		.orderBy(desc(schema.quotes.createdAt))
+		.limit(1);
+	if (!found) return null;
+	const { request, quote } = found;
+	if (quote.status === "accepted") {
+		const job = await db.query.jobs.findFirst({
+			where: eq(schema.jobs.quoteId, quote.id),
+		});
+		const ids = quote.lineItems.flatMap((l) =>
+			l.productId ? [l.productId] : [],
+		);
+		const products = ids.length
+			? await db
+					.select()
+					.from(schema.products)
+					.where(inArray(schema.products.id, ids))
+			: [];
+		if (
+			(job &&
+				(job.kind !== "project" ||
+					["completed", "closed"].includes(job.status))) ||
+			!products.some((p) => p.pricingMode === "custom") ||
+			products.some((p) => p.type === "stock")
+		)
+			return null;
+	}
 	return { request, quote };
 }
 
@@ -160,6 +190,7 @@ async function historyFor(
 
 const toTurns = (rows: Awaited<ReturnType<typeof historyFor>>): ChatTurn[] =>
 	rows.map((m) => ({
+		id: m.id,
 		sender: m.sender,
 		body: m.body,
 		attachment: m.attachment,
@@ -238,6 +269,7 @@ function applyReading(
 	reading: Reading,
 	latest: { id: string; attachment: Attachment | null },
 	catalog: Catalog,
+	history: ChatTurn[],
 ): { brief: Brief; changed: boolean } {
 	const now = new Date().toISOString();
 	const next: Brief = structuredClone(brief);
@@ -251,11 +283,11 @@ function applyReading(
 
 	const mergeAnswers = (
 		target: Record<string, Answer>,
-		incoming: { key: string; values: string[] }[],
+		incoming: Reading["general"],
 		allowed: Question[],
 	) => {
 		const types = new Map(allowed.map((q) => [q.key, q.type]));
-		for (const { key, values } of incoming) {
+		for (const { key, values, state, evidenceMessageId } of incoming) {
 			if (!types.has(key)) continue;
 			let clean = values.map((v) => v.trim()).filter(Boolean);
 			if (clean.length === 0) continue;
@@ -267,13 +299,28 @@ function applyReading(
 				fileMessageId = latest.id;
 			}
 			const prev = target[key];
-			if (prev && prev.source !== "skipped" && sameValues(prev.values, clean))
+			const evidence = history.find(
+				(m) => m.id === evidenceMessageId && m.sender === "customer",
+			);
+			if (
+				(prev?.source === "staff" || prev?.source === "skipped") &&
+				evidence?.id !== latest.id
+			)
+				continue;
+			const answerState = evidence || fileMessageId ? state : "ambiguous";
+			if (
+				prev &&
+				prev.source !== "skipped" &&
+				sameValues(prev.values, clean) &&
+				(prev.state ?? "known") === answerState
+			)
 				continue;
 			// Staff-entered answers win unless the customer says something new about it.
 			target[key] = {
 				values: clean,
 				source: "customer",
-				messageId: latest.id,
+				...(evidence?.id ? { messageId: evidence.id } : {}),
+				state: answerState,
 				...(fileMessageId ? { fileMessageId } : {}),
 				at: now,
 			};
@@ -307,6 +354,7 @@ function applyReading(
 			next.items.push(item);
 			changed = true;
 		} else if (existing.productId !== productId || existing.match !== match) {
+			if (existing.productId !== productId) item.answers = {};
 			changed = true;
 		}
 		item.match = match;
@@ -321,6 +369,7 @@ function applyReading(
 		}
 		const product = productId ? productById.get(productId) : undefined;
 		if (product) {
+			item.productName = product.name;
 			mergeAnswers(
 				item.answers,
 				r.answers,
@@ -339,13 +388,8 @@ function applyReading(
 		const f = next.followUps.find((x) => x.id === fa.id);
 		if (f && fa.answer.trim() && f.answer !== fa.answer.trim()) {
 			f.answer = fa.answer.trim();
-			changed = true;
-		}
-	}
-	// The AI's own follow-ups are asked once: if the reply didn't answer it, let it go.
-	for (const f of next.followUps) {
-		if (f.from === "ai" && f.asked && f.answer === null) {
-			f.answer = "(no clear answer)";
+			delete f.waivedBy;
+			delete f.waiverReason;
 			changed = true;
 		}
 	}
@@ -362,7 +406,7 @@ function applyReading(
 		reading.followUp &&
 		answeredKeys.has(reading.followUp.aboutKey) &&
 		aiFollowUps.length < MAX_AI_FOLLOW_UPS &&
-		!aiFollowUps.some((f) => f.answer === null)
+		!aiFollowUps.some((f) => !followUpResolved(f))
 	) {
 		next.followUps.push({
 			id: crypto.randomUUID().slice(0, 8),
@@ -451,8 +495,12 @@ function summaryLines(a: Assessment, brief: Brief) {
 
 // --- Persistence ----------------------------------------------------------------------------
 
-async function nextQuoteNumber(businessId: string, prefix: string) {
-	const [{ n }] = await getDb()
+async function nextQuoteNumber(
+	db: Database,
+	businessId: string,
+	prefix: string,
+) {
+	const [{ n }] = await db
 		.select({ n: count() })
 		.from(schema.quotes)
 		.where(
@@ -466,65 +514,83 @@ async function nextQuoteNumber(businessId: string, prefix: string) {
 
 /** Creates or updates the draft. While revising a sent quote, the draft is its next revision. */
 async function upsertDraftQuote(
-	requestId: string,
+	request: typeof schema.quoteRequests.$inferSelect,
 	business: Catalog["business"],
 	lineItems: LineItem[],
 	revisionOf: string | null | undefined,
+	products: IntakeProduct[],
+	questions: Question[],
 ) {
-	const db = getDb();
-	const t = totals(lineItems, business.sstRateBps, business.sstRegistered);
-	const validUntil = new Date(
-		Date.now() + business.quoteValidityDays * 86_400_000,
-	);
-	const existing = await db.query.quotes.findFirst({
-		where: and(
-			eq(schema.quotes.requestId, requestId),
-			eq(schema.quotes.status, "draft"),
-		),
-	});
-	if (existing) {
+	return getDb().transaction(async (db) => {
+		const requestId = request.id;
+		const [current] = await db
+			.select()
+			.from(schema.quoteRequests)
+			.where(eq(schema.quoteRequests.id, requestId))
+			.for("update");
+		if (!current || current.briefVersion !== request.briefVersion)
+			throw new Error("Requirements changed. Prepare the draft again.");
+		if (!["draft_ready", "needs_review"].includes(current.status))
+			throw new Error(
+				"The request stage changed. Review it before preparing another draft.",
+			);
+		const snapshot = snapshotBrief(current.brief, products, questions);
+		// Serialize quote numbering for this business as well as the draft update.
+		await db
+			.select({ id: schema.businesses.id })
+			.from(schema.businesses)
+			.where(eq(schema.businesses.id, business.id))
+			.for("update");
+		const t = totals(lineItems, business.sstRateBps, business.sstRegistered);
+		const validUntil = new Date(
+			Date.now() + business.quoteValidityDays * 86_400_000,
+		);
+		const existing = await db.query.quotes.findFirst({
+			where: and(
+				eq(schema.quotes.requestId, requestId),
+				eq(schema.quotes.status, "draft"),
+			),
+		});
+		if (existing) {
+			const [row] = await db
+				.update(schema.quotes)
+				.set({
+					lineItems,
+					...t,
+					validUntil,
+					requirementVersion: current.briefVersion,
+					requirementsSnapshot: snapshot,
+				})
+				.where(eq(schema.quotes.id, existing.id))
+				.returning();
+			return row;
+		}
+		const previous = revisionOf
+			? await db.query.quotes.findFirst({
+					where: eq(schema.quotes.id, revisionOf),
+				})
+			: undefined;
+		const revision = previous ? previous.revision + 1 : 1;
+		const base = previous
+			? previous.number.replace(/-R\d+$/, "")
+			: await nextQuoteNumber(db, business.id, business.quotePrefix);
 		const [row] = await db
-			.update(schema.quotes)
-			.set({ lineItems, ...t, validUntil })
-			.where(eq(schema.quotes.id, existing.id))
+			.insert(schema.quotes)
+			.values({
+				number: revision > 1 ? `${base}-R${revision}` : base,
+				revision,
+				supersedesId: previous?.id ?? null,
+				businessId: business.id,
+				requestId,
+				requirementVersion: current.briefVersion,
+				requirementsSnapshot: snapshot,
+				lineItems,
+				...t,
+				validUntil,
+			})
 			.returning();
 		return row;
-	}
-	const previous = revisionOf
-		? await db.query.quotes.findFirst({
-				where: eq(schema.quotes.id, revisionOf),
-			})
-		: undefined;
-	const revision = previous ? previous.revision + 1 : 1;
-	const base = previous
-		? previous.number.replace(/-R\d+$/, "")
-		: await nextQuoteNumber(business.id, business.quotePrefix);
-	const [row] = await db
-		.insert(schema.quotes)
-		.values({
-			number: revision > 1 ? `${base}-R${revision}` : base,
-			revision,
-			supersedesId: previous?.id ?? null,
-			businessId: business.id,
-			requestId,
-			lineItems,
-			...t,
-			validUntil,
-		})
-		.returning();
-	return row;
-}
-
-async function saveRequest(
-	id: string,
-	values: Partial<typeof schema.quoteRequests.$inferInsert>,
-) {
-	const [row] = await getDb()
-		.update(schema.quoteRequests)
-		.set({ ...values, updatedAt: new Date() })
-		.where(eq(schema.quoteRequests.id, id))
-		.returning();
-	return row;
+	});
 }
 
 // --- Deciding the next step ---------------------------------------------------------------
@@ -540,6 +606,7 @@ type Advance = {
 	run: Run;
 	history: ChatTurn[];
 	customerQuestion: string | null;
+	messageId?: string;
 	/** Staff pressed "Ask now": always send something useful, never a recap of nothing. */
 	nudged?: boolean;
 };
@@ -548,7 +615,21 @@ type Advance = {
  * Picks the stage from what's known: keep asking, recap for confirmation, or
  * draft. Saves the request, drafts if due, and writes the reply.
  */
-async function advance(a: Advance): Promise<{
+async function advance(a: Advance) {
+	try {
+		return await advanceRequest(a);
+	} catch (error) {
+		await a.run.add({
+			kind: "error",
+			title: "This action needs attention",
+			detail: [error instanceof Error ? error.message : String(error)],
+		});
+		await a.run.finish("failed");
+		throw error;
+	}
+}
+
+async function advanceRequest(a: Advance): Promise<{
 	status: RequestStatus;
 	reply: string | null;
 }> {
@@ -579,6 +660,10 @@ async function advance(a: Advance): Promise<{
 	let asks: Missing[] = [];
 
 	if (a.forceDraft) {
+		if (assessment.blocking.length)
+			throw new Error(
+				"Resolve or explicitly waive the required details before drafting.",
+			);
 		draft = true;
 		status = "draft_ready";
 		plan = { stage: "chat" };
@@ -677,17 +762,27 @@ async function advance(a: Advance): Promise<{
 			catalog.questions,
 		);
 		status = result.outcome;
-		const quote = await upsertDraftQuote(
+		const saved = await saveRequest(
 			request.id,
+			{
+				status: result.outcome,
+				brief,
+				flags: result.flags,
+				...(a.messageId ? { processedMessageId: a.messageId } : {}),
+			},
+			request.briefVersion,
+			a.forceDraft ? "staff" : "quora-chat",
+			"Updated customer requirements",
+			request.status,
+		);
+		const quote = await upsertDraftQuote(
+			saved,
 			business,
 			result.lineItems,
 			brief.revisionOf,
+			products,
+			catalog.questions,
 		);
-		await saveRequest(request.id, {
-			status,
-			brief,
-			flags: result.flags,
-		});
 		if (result.lineItems.length) {
 			await run.add({
 				kind: "price",
@@ -723,7 +818,18 @@ async function advance(a: Advance): Promise<{
 			payload: { quoteId: quote.id, flags: result.flags },
 		});
 	} else {
-		await saveRequest(request.id, { status, brief });
+		await saveRequest(
+			request.id,
+			{
+				status,
+				brief,
+				...(a.messageId ? { processedMessageId: a.messageId } : {}),
+			},
+			request.briefVersion,
+			"quora-chat",
+			"Updated customer requirements",
+			request.status,
+		);
 		if (status === "confirming" && request.status !== "confirming") {
 			await emitOrbyteEvent(db, {
 				businessId: business.id,
@@ -792,16 +898,24 @@ export async function* handleCustomerMessage(input: {
 				size: Math.round((input.attachment.dataUrl.length * 3) / 4),
 			}
 		: null;
-	const [incoming] = await db
-		.insert(schema.messages)
-		.values({
-			conversationId: conversation.id,
-			sender: "customer",
-			body: input.body,
-			attachment,
-			attachmentData: input.attachment?.dataUrl ?? null,
-		})
-		.returning();
+	const incoming = await db.transaction(async (tx) => {
+		await tx
+			.select({ id: schema.conversations.id })
+			.from(schema.conversations)
+			.where(eq(schema.conversations.id, conversation.id))
+			.for("update");
+		const [message] = await tx
+			.insert(schema.messages)
+			.values({
+				conversationId: conversation.id,
+				sender: "customer",
+				body: input.body,
+				attachment,
+				attachmentData: input.attachment?.dataUrl ?? null,
+			})
+			.returning();
+		return message;
+	});
 	const run = await startRun(conversation.id, incoming.id);
 	const open = await findOpenRequest(conversation.id);
 	await emitOrbyteEvent(db, {
@@ -897,7 +1011,11 @@ export async function* handleCustomerMessage(input: {
 		],
 	});
 
-	const brief0 = open?.brief ?? sent?.request.brief ?? emptyBrief();
+	const brief0 =
+		open?.brief ??
+		sent?.quote.requirementsSnapshot ??
+		sent?.request.brief ??
+		emptyBrief();
 	const products = intakeProducts(catalog.products);
 	let reading: Reading;
 	try {
@@ -929,12 +1047,13 @@ export async function* handleCustomerMessage(input: {
 				general: answerValues(brief0.general),
 			},
 			openFollowUps: brief0.followUps
-				.filter((f) => f.answer === null)
+				.filter((f) => !followUpResolved(f))
 				.map((f) => ({ id: f.id, question: f.question })),
 			stage: open?.status === "confirming" ? "confirming" : "gathering",
 			sentQuote: sent
 				? {
 						number: sent.quote.number,
+						signed: sent.quote.status === "accepted",
 						lines: sent.quote.lineItems.map(
 							(l) => `${l.description} × ${l.quantity} ${l.unit}`,
 						),
@@ -994,6 +1113,7 @@ export async function* handleCustomerMessage(input: {
 			: reading,
 		incoming,
 		catalog,
+		history,
 	);
 	const names = new Map(products.map((p) => [p.id, p.name]));
 	await run.add({
@@ -1033,10 +1153,23 @@ export async function* handleCustomerMessage(input: {
 	let request = open;
 	if (!request && sent && reading.wantsChange) {
 		brief.revisionOf = sent.quote.id;
-		request = await saveRequest(sent.request.id, {
-			status: "gathering",
-			brief,
-		});
+		request =
+			sent.quote.status === "accepted"
+				? await createRequest(
+						{
+							businessId,
+							conversationId: conversation.id,
+							status: "gathering",
+							brief,
+							processedMessageId: incoming.id,
+						},
+						conversation.customerName,
+					)
+				: await saveRequest(
+						sent.request.id,
+						{ status: "gathering", brief },
+						sent.request.briefVersion,
+					);
 		await emitOrbyteEvent(db, {
 			businessId,
 			requestId: request.id,
@@ -1049,15 +1182,12 @@ export async function* handleCustomerMessage(input: {
 	const hasContent =
 		brief.items.length > 0 || Object.keys(brief.general).length > 0;
 	if (!request && hasContent) {
-		[request] = await db
-			.insert(schema.quoteRequests)
-			.values({
-				businessId,
-				conversationId: conversation.id,
-				status: "gathering",
-				brief,
-			})
-			.returning();
+		request = await createRequest({
+			businessId,
+			conversationId: conversation.id,
+			status: "gathering",
+			brief,
+		});
 		await emitOrbyteEvent(db, {
 			businessId,
 			requestId: request.id,
@@ -1121,6 +1251,7 @@ export async function* handleCustomerMessage(input: {
 			run,
 			history,
 			customerQuestion: reading.customerQuestion,
+			messageId: incoming.id,
 		});
 		status = result.status;
 		reply = result.reply ?? fallbackReply(brief.language);
@@ -1164,12 +1295,12 @@ async function loadRequest(requestId: string) {
 
 export type BriefEdit =
 	| { kind: "answer"; itemId: string | null; key: string; values: string[] }
-	| { kind: "skip"; itemId: string | null; key: string }
+	| { kind: "skip"; itemId: string | null; key: string; reason: string }
 	| { kind: "clear"; itemId: string | null; key: string }
 	| { kind: "quantity"; itemId: string; quantity: number | null }
 	| { kind: "product"; itemId: string; productId: string }
 	| { kind: "add_follow_up"; question: string }
-	| { kind: "remove_follow_up"; id: string }
+	| { kind: "remove_follow_up"; id: string; reason: string }
 	| { kind: "answer_follow_up"; id: string; answer: string };
 
 /** Staff correct or fill in the brief (e.g. after a phone call), or add a question for the AI to ask. */
@@ -1177,11 +1308,18 @@ export async function editBrief(input: {
 	requestId: string;
 	staffId: string;
 	edit: BriefEdit;
+	expectedVersion?: number;
 }) {
 	const db = getDb();
 	const request = await loadRequest(input.requestId);
+	if (
+		input.expectedVersion !== undefined &&
+		input.expectedVersion !== request.briefVersion
+	)
+		throw new Error("Requirements changed. Refresh before editing.");
 	if (!OPEN.includes(request.status)) throw new Error("This request is closed");
 	const member = await loadStaff(input.staffId, request.businessId);
+	const catalog = await loadCatalog(request.businessId);
 	const brief = structuredClone(request.brief);
 	const now = new Date().toISOString();
 	const e = input.edit;
@@ -1192,11 +1330,29 @@ export async function editBrief(input: {
 		return item.answers;
 	};
 	let summary: string;
+	const questionFor = (itemId: string | null, key: string) => {
+		const item = brief.items.find((i) => i.id === itemId);
+		const product = catalog.products.find((p) => p.id === item?.productId);
+		const q = (
+			itemId === null
+				? businessQuestions(catalog.questions)
+				: product
+					? questionsFor(product, catalog.questions)
+					: []
+		).find((q) => q.key === key);
+		if (!q) throw new Error("Question not found for this requirement");
+		return q;
+	};
 
 	switch (e.kind) {
 		case "answer": {
 			const values = e.values.map((v) => v.trim()).filter(Boolean);
 			if (!values.length) throw new Error("Enter an answer");
+			const issue = answerIssue(
+				{ values, source: "staff", at: now },
+				questionFor(e.itemId, e.key),
+			);
+			if (issue) throw new Error(issue);
 			answersOf(e.itemId)[e.key] = {
 				values,
 				source: "staff",
@@ -1206,15 +1362,22 @@ export async function editBrief(input: {
 			summary = `${member.name} filled in ${e.key}: ${values.join(", ")}`;
 			break;
 		}
-		case "skip":
+		case "skip": {
+			questionFor(e.itemId, e.key);
+			if (!member.canApprove)
+				throw new Error("Only an approver can waive a requirement");
+			if (!e.reason.trim())
+				throw new Error("Explain why this requirement can be waived");
 			answersOf(e.itemId)[e.key] = {
 				values: [],
 				source: "skipped",
 				by: member.name,
 				at: now,
+				waiverReason: e.reason.trim(),
 			};
-			summary = `${member.name} told the AI to skip ${e.key}`;
+			summary = `${member.name} waived ${e.key}: ${e.reason.trim()}`;
 			break;
+		}
 		case "clear":
 			delete answersOf(e.itemId)[e.key];
 			summary = `${member.name} cleared ${e.key}`;
@@ -1229,6 +1392,9 @@ export async function editBrief(input: {
 		case "product": {
 			const item = brief.items.find((i) => i.id === e.itemId);
 			if (!item) throw new Error("Item not found");
+			if (!catalog.products.some((p) => p.id === e.productId))
+				throw new Error("Product is not in this business's active catalog");
+			if (item.productId !== e.productId) item.answers = {};
 			item.productId = e.productId;
 			item.match = "exact";
 			summary = `${member.name} matched "${item.rawText}" to ${e.productId}`;
@@ -1249,24 +1415,55 @@ export async function editBrief(input: {
 			summary = `${member.name} asked the AI to find out: ${question}`;
 			break;
 		}
-		case "remove_follow_up":
-			brief.followUps = brief.followUps.filter((f) => f.id !== e.id);
-			summary = `${member.name} removed a follow-up question`;
+		case "remove_follow_up": {
+			if (!member.canApprove)
+				throw new Error("Only an approver can waive a follow-up");
+			if (!e.reason.trim())
+				throw new Error("Explain why this follow-up can be waived");
+			const f = brief.followUps.find((f) => f.id === e.id);
+			if (!f) throw new Error("Follow-up not found");
+			f.waivedBy = member.name;
+			f.waiverReason = e.reason.trim();
+			summary = `${member.name} waived a follow-up: ${e.reason.trim()}`;
 			break;
+		}
 		case "answer_follow_up": {
 			const f = brief.followUps.find((x) => x.id === e.id);
 			if (!f) throw new Error("Question not found");
 			f.answer = e.answer.trim() || null;
+			delete f.waivedBy;
+			delete f.waiverReason;
 			summary = `${member.name} answered: ${f.question}`;
 			break;
 		}
 	}
 
 	// New gaps mean the customer hasn't confirmed everything any more.
-	const row = await saveRequest(request.id, {
-		brief,
-		status: request.status === "confirming" ? "gathering" : request.status,
+	brief.summary = brief.items
+		.map(
+			(item) =>
+				`${catalog.products.find((p) => p.id === item.productId)?.name ?? item.rawText}${item.quantity !== null ? ` × ${item.quantity}` : ""}`,
+		)
+		.join("; ");
+	const latest = await db.query.messages.findFirst({
+		where: and(
+			eq(schema.messages.conversationId, request.conversationId),
+			eq(schema.messages.sender, "customer"),
+		),
+		orderBy: desc(schema.messages.createdAt),
 	});
+	const row = await saveRequest(
+		request.id,
+		{
+			brief,
+			status: "gathering",
+			processedMessageId: latest?.id ?? request.processedMessageId,
+		},
+		request.briefVersion,
+		member.name,
+		summary,
+		request.status,
+	);
 	await emitOrbyteEvent(db, {
 		businessId: request.businessId,
 		requestId: request.id,
@@ -1296,6 +1493,10 @@ async function staffAdvance(input: {
 	const request = await loadRequest(input.requestId);
 	if (!OPEN.includes(request.status)) throw new Error("This request is closed");
 	const member = await loadStaff(input.staffId, request.businessId);
+	if (input.forceDraft && !member.canApprove)
+		throw new Error(
+			"Only an approver can prepare a draft without customer confirmation",
+		);
 	const conversation = await db.query.conversations.findFirst({
 		where: eq(schema.conversations.id, request.conversationId),
 	});
@@ -1347,40 +1548,73 @@ export async function editDraftQuote(input: {
 	staffId: string;
 	lineItems: LineItem[];
 	notes: string | null;
+	reviewToken: string;
 }) {
-	const db = getDb();
-	const quote = await db.query.quotes.findFirst({
-		where: eq(schema.quotes.id, input.quoteId),
-	});
-	if (!quote) throw new Error("Quote not found");
-	if (quote.status !== "draft") throw new Error("Only drafts can be edited");
-	const member = await loadStaff(input.staffId, quote.businessId);
-	const business = await db.query.businesses.findFirst({
-		where: eq(schema.businesses.id, quote.businessId),
-	});
-	if (!business) throw new Error("Business not found");
+	return getDb().transaction(async (db) => {
+		const quote = await db.query.quotes.findFirst({
+			where: eq(schema.quotes.id, input.quoteId),
+		});
+		if (!quote) throw new Error("Quote not found");
+		const [request] = await db
+			.select()
+			.from(schema.quoteRequests)
+			.where(eq(schema.quoteRequests.id, quote.requestId))
+			.for("update");
+		const [current] = await db
+			.select()
+			.from(schema.quotes)
+			.where(eq(schema.quotes.id, quote.id))
+			.for("update");
+		if (current.status !== "draft")
+			throw new Error("Only drafts can be edited");
+		const issue = quoteAgreementIssue(current, request);
+		if (issue) throw new Error(issue);
+		if (input.reviewToken !== quoteReviewToken(current))
+			throw new Error("The quotation changed. Refresh before editing.");
+		const member = await loadStaff(input.staffId, quote.businessId);
+		const business = await db.query.businesses.findFirst({
+			where: eq(schema.businesses.id, quote.businessId),
+		});
+		if (!business) throw new Error("Business not found");
+		const productIds = input.lineItems.flatMap((l) =>
+			l.productId ? [l.productId] : [],
+		);
+		const products = productIds.length
+			? await db
+					.select()
+					.from(schema.products)
+					.where(
+						and(
+							inArray(schema.products.id, productIds),
+							eq(schema.products.businessId, quote.businessId),
+						),
+					)
+			: [];
+		if (productIds.some((id) => !products.some((p) => p.id === id)))
+			throw new Error("Quote items must belong to this business");
 
-	const lineItems = input.lineItems.map((l) => ({
-		...l,
-		amountSen: l.amountSen ?? l.unitPriceSen * l.quantity,
-	}));
-	const [row] = await db
-		.update(schema.quotes)
-		.set({
-			lineItems,
-			notes: input.notes,
-			...totals(lineItems, business.sstRateBps, business.sstRegistered),
-		})
-		.where(eq(schema.quotes.id, quote.id))
-		.returning();
-	await emitOrbyteEvent(db, {
-		businessId: quote.businessId,
-		requestId: quote.requestId,
-		type: "quote.draft.edited",
-		actor: member.name,
-		summary: `${member.name} edited ${quote.number} (${formatMYR(row.totalSen)})`,
+		const lineItems = input.lineItems.map((l) => ({
+			...l,
+			amountSen: l.amountSen ?? l.unitPriceSen * l.quantity,
+		}));
+		const [row] = await db
+			.update(schema.quotes)
+			.set({
+				lineItems,
+				notes: input.notes,
+				...totals(lineItems, business.sstRateBps, business.sstRegistered),
+			})
+			.where(eq(schema.quotes.id, quote.id))
+			.returning();
+		await emitOrbyteEvent(db, {
+			businessId: quote.businessId,
+			requestId: quote.requestId,
+			type: "quote.draft.edited",
+			actor: member.name,
+			summary: `${member.name} edited ${quote.number} (${formatMYR(row.totalSen)})`,
+		});
+		return row;
 	});
-	return row;
 }
 
 function quoteMessage(input: {
@@ -1408,117 +1642,210 @@ export async function decideQuote(input: {
 	staffId: string;
 	decision: "approved" | "rejected";
 	reason?: string;
+	reviewToken: string;
 }) {
-	const db = getDb();
-	const quote = await db.query.quotes.findFirst({
-		where: eq(schema.quotes.id, input.quoteId),
-	});
-	if (!quote) throw new Error("Quote not found");
-	if (quote.status !== "draft")
-		throw new Error("Quote has already been decided");
-	const member = await loadStaff(input.staffId, quote.businessId);
-	if (!member.canApprove)
-		throw new Error(`${member.name} is not authorised to approve quotes`);
-	if (
-		input.decision === "approved" &&
-		(quote.lineItems.length === 0 || quote.totalSen <= 0)
-	) {
-		throw new Error("Add at least one priced line before approving");
-	}
-	if (
-		input.decision === "approved" &&
-		quote.lineItems.some((l) => l.unitPriceSen <= 0)
-	) {
-		throw new Error("Every line needs a price before approving");
-	}
-
-	const request = await loadRequest(quote.requestId);
-	const business = await db.query.businesses.findFirst({
-		where: eq(schema.businesses.id, quote.businessId),
-	});
-	const conversation = await db.query.conversations.findFirst({
-		where: eq(schema.conversations.id, request.conversationId),
-	});
-
-	const now = new Date();
-	const [row] = await db
-		.update(schema.quotes)
-		.set({ status: input.decision, decidedBy: member.id, decidedAt: now })
-		.where(eq(schema.quotes.id, quote.id))
-		.returning();
-	const brief = { ...request.brief, revisionOf: null };
-	await saveRequest(request.id, {
-		// A rejected revision leaves the earlier sent quote in place.
-		status:
-			input.decision === "rejected" && quote.supersedesId
-				? "approved"
-				: input.decision,
-		brief,
-	});
-
-	await emitOrbyteEvent(db, {
-		businessId: quote.businessId,
-		requestId: request.id,
-		type: input.decision === "approved" ? "quote.approved" : "quote.rejected",
-		actor: member.name,
-		summary:
-			input.decision === "approved"
-				? `${member.name} approved ${quote.number} (${formatMYR(quote.totalSen)})`
-				: `${member.name} rejected ${quote.number}${input.reason ? `: ${input.reason}` : ""}`,
-	});
-
-	if (input.decision === "approved") {
-		if (quote.supersedesId) {
-			const [old] = await db
-				.update(schema.quotes)
-				.set({ status: "superseded" })
-				.where(
-					and(
-						eq(schema.quotes.id, quote.supersedesId),
-						eq(schema.quotes.status, "approved"),
-					),
+	return getDb().transaction(async (db) => {
+		const initial = await db.query.quotes.findFirst({
+			where: eq(schema.quotes.id, input.quoteId),
+		});
+		if (!initial) throw new Error("Quote not found");
+		const requestInfo = await db.query.quoteRequests.findFirst({
+			where: eq(schema.quoteRequests.id, initial.requestId),
+		});
+		if (!requestInfo) throw new Error("Request not found");
+		await db
+			.select({ id: schema.conversations.id })
+			.from(schema.conversations)
+			.where(eq(schema.conversations.id, requestInfo.conversationId))
+			.for("update");
+		const [request] = await db
+			.select()
+			.from(schema.quoteRequests)
+			.where(eq(schema.quoteRequests.id, initial.requestId))
+			.for("update");
+		const [quote] = await db
+			.select()
+			.from(schema.quotes)
+			.where(eq(schema.quotes.id, input.quoteId))
+			.for("update");
+		if (quote.status !== "draft")
+			throw new Error("Quote has already been decided");
+		if (
+			input.decision === "rejected" &&
+			quote.requirementVersion !== request.briefVersion
+		)
+			throw new Error(
+				"This outdated draft cannot close the updated request. Prepare the current draft first.",
+			);
+		if (input.reviewToken !== quoteReviewToken(quote))
+			throw new Error(
+				"The quotation changed. Refresh and review it before deciding.",
+			);
+		if (input.decision === "approved") {
+			const issue = quoteAgreementIssue(quote, request);
+			if (issue) throw new Error(issue);
+			const latest = await db.query.messages.findFirst({
+				where: and(
+					eq(schema.messages.conversationId, request.conversationId),
+					eq(schema.messages.sender, "customer"),
+				),
+				orderBy: desc(schema.messages.createdAt),
+			});
+			if (latest && latest.id !== request.processedMessageId)
+				throw new Error(
+					"A customer message has not been reviewed yet. Wait for the updated brief.",
+				);
+			const catalog = await loadCatalog(request.businessId);
+			if (
+				assess(
+					request.brief,
+					intakeProducts(catalog.products),
+					catalog.questions,
+				).blocking.length
+			)
+				throw new Error(
+					"Resolve or waive the outstanding requirements before approving.",
+				);
+			const baseline = await deliveryBaseline(db, quote);
+			if (baseline) {
+				if (
+					baseline.quote.status !== "accepted" ||
+					(baseline.job &&
+						(baseline.job.kind !== "project" ||
+							["completed", "closed"].includes(baseline.job.status)))
 				)
-				.returning();
-			if (old)
-				await emitOrbyteEvent(db, {
-					businessId: quote.businessId,
-					requestId: request.id,
-					type: "quote.superseded",
-					actor: member.name,
-					summary: `${old.number} replaced by ${quote.number}`,
-				});
+					throw new Error(
+						"This signed agreement can no longer be revised as an active project",
+					);
+				const ids = [...baseline.quote.lineItems, ...quote.lineItems].flatMap(
+					(l) => (l.productId ? [l.productId] : []),
+				);
+				if (
+					ids.length &&
+					(
+						await db
+							.select()
+							.from(schema.products)
+							.where(
+								and(
+									inArray(schema.products.id, ids),
+									eq(schema.products.type, "stock"),
+								),
+							)
+					).length
+				)
+					throw new Error(
+						"Signed changes involving inventory require a separate order and stock review",
+					);
+			}
 		}
-		await db.insert(schema.messages).values({
-			conversationId: request.conversationId,
-			sender: "staff",
-			authorName: member.name,
-			body: quoteMessage({
-				language: request.brief.language,
-				name: conversation?.customerName ?? "",
-				number: quote.number,
-				total: formatMYR(quote.totalSen),
-				validUntil: quote.validUntil.toLocaleDateString("en-MY"),
-				sst: Boolean(business?.sstRegistered),
-				revision: quote.revision > 1,
-			}),
-			quoteId: quote.id,
+		const member = await loadStaff(input.staffId, quote.businessId);
+		if (!member.canApprove)
+			throw new Error(`${member.name} is not authorised to approve quotes`);
+		if (
+			input.decision === "approved" &&
+			(quote.lineItems.length === 0 || quote.totalSen <= 0)
+		) {
+			throw new Error("Add at least one priced line before approving");
+		}
+		if (
+			input.decision === "approved" &&
+			quote.lineItems.some((l) => l.unitPriceSen <= 0)
+		) {
+			throw new Error("Every line needs a price before approving");
+		}
+
+		const business = await db.query.businesses.findFirst({
+			where: eq(schema.businesses.id, quote.businessId),
 		});
+		const conversation = await db.query.conversations.findFirst({
+			where: eq(schema.conversations.id, request.conversationId),
+		});
+
+		const now = new Date();
+		const [row] = await db
+			.update(schema.quotes)
+			.set({ status: input.decision, decidedBy: member.id, decidedAt: now })
+			.where(eq(schema.quotes.id, quote.id))
+			.returning();
+		const brief = { ...request.brief, revisionOf: null };
+		await db
+			.update(schema.quoteRequests)
+			.set({
+				// A rejected revision leaves the earlier sent quote in place.
+				status:
+					input.decision === "rejected" && quote.supersedesId
+						? "approved"
+						: input.decision,
+				brief,
+				updatedAt: now,
+			})
+			.where(eq(schema.quoteRequests.id, request.id));
+
 		await emitOrbyteEvent(db, {
 			businessId: quote.businessId,
 			requestId: request.id,
-			type: "quote.sent_to_customer",
-			actor: "quora-chat",
-			summary: `${quote.number} sent to customer on WhatsApp`,
+			type: input.decision === "approved" ? "quote.approved" : "quote.rejected",
+			actor: member.name,
+			summary:
+				input.decision === "approved"
+					? `${member.name} approved ${quote.number} (${formatMYR(quote.totalSen)})`
+					: `${member.name} rejected ${quote.number}${input.reason ? `: ${input.reason}` : ""}`,
 		});
-		await emitOrbyteEvent(db, {
-			businessId: quote.businessId,
-			requestId: request.id,
-			type: "esign.sent",
-			actor: "eSign",
-			summary: `${quote.number} sent for customer signature`,
-		});
-	}
-	return row;
+
+		if (input.decision === "approved") {
+			if (quote.supersedesId) {
+				const [old] = await db
+					.update(schema.quotes)
+					.set({ status: "superseded" })
+					.where(
+						and(
+							eq(schema.quotes.id, quote.supersedesId),
+							eq(schema.quotes.status, "approved"),
+						),
+					)
+					.returning();
+				if (old)
+					await emitOrbyteEvent(db, {
+						businessId: quote.businessId,
+						requestId: request.id,
+						type: "quote.superseded",
+						actor: member.name,
+						summary: `${old.number} replaced by ${quote.number}`,
+					});
+			}
+			await db.insert(schema.messages).values({
+				conversationId: request.conversationId,
+				sender: "staff",
+				authorName: member.name,
+				body: quoteMessage({
+					language: request.brief.language,
+					name: conversation?.customerName ?? "",
+					number: quote.number,
+					total: formatMYR(quote.totalSen),
+					validUntil: quote.validUntil.toLocaleDateString("en-MY"),
+					sst: Boolean(business?.sstRegistered),
+					revision: quote.revision > 1,
+				}),
+				quoteId: quote.id,
+			});
+			await emitOrbyteEvent(db, {
+				businessId: quote.businessId,
+				requestId: request.id,
+				type: "quote.sent_to_customer",
+				actor: "quora-chat",
+				summary: `${quote.number} sent to customer on WhatsApp`,
+			});
+			await emitOrbyteEvent(db, {
+				businessId: quote.businessId,
+				requestId: request.id,
+				type: "esign.sent",
+				actor: "eSign",
+				summary: `${quote.number} sent for customer signature`,
+			});
+		}
+		return row;
+	});
 }
 
 // --- Chat takeover -------------------------------------------------------------
@@ -1640,63 +1967,148 @@ export async function signQuote(input: {
 	signerName: string;
 	signatureImage: string;
 }) {
-	const db = getDb();
-	const { quote, request } = await loadSignableQuote(input.quoteId);
-	if (quote.status === "accepted") throw new Error("Already signed");
-	if (quote.status === "superseded")
-		throw new Error("This quotation was replaced by a newer version");
-	if (quote.status !== "approved")
-		throw new Error("This quotation is not open for signing");
-	if (quote.validUntil < new Date())
-		throw new Error("This quotation has expired");
+	return getDb().transaction(async (db) => {
+		const initial = await db.query.quotes.findFirst({
+			where: eq(schema.quotes.id, input.quoteId),
+		});
+		if (!initial) throw new Error("Quote not found");
+		const requestInfo = await db.query.quoteRequests.findFirst({
+			where: eq(schema.quoteRequests.id, initial.requestId),
+		});
+		if (!requestInfo) throw new Error("Request not found");
+		await db
+			.select({ id: schema.conversations.id })
+			.from(schema.conversations)
+			.where(eq(schema.conversations.id, requestInfo.conversationId))
+			.for("update");
+		const [request] = await db
+			.select()
+			.from(schema.quoteRequests)
+			.where(eq(schema.quoteRequests.id, initial.requestId))
+			.for("update");
+		const [quote] = await db
+			.select()
+			.from(schema.quotes)
+			.where(eq(schema.quotes.id, input.quoteId))
+			.for("update");
+		if (quote.status === "accepted") return quote;
+		if (quote.status === "superseded")
+			throw new Error("This quotation was replaced by a newer version");
+		if (quote.status !== "approved")
+			throw new Error("This quotation is not open for signing");
+		if (quote.validUntil < new Date())
+			throw new Error("This quotation has expired");
+		const issue = quoteAgreementIssue(quote, {
+			...request,
+			status: request.status === "approved" ? "draft_ready" : request.status,
+		});
+		if (issue)
+			throw new Error(
+				"The requirements for this quotation need review. Please ask our team for an updated quotation.",
+			);
+		const latest = await db.query.messages.findFirst({
+			where: and(
+				eq(schema.messages.conversationId, request.conversationId),
+				eq(schema.messages.sender, "customer"),
+			),
+			orderBy: desc(schema.messages.createdAt),
+		});
+		if (latest && latest.id !== request.processedMessageId)
+			throw new Error(
+				"Our team is reviewing your latest message. Please wait before signing.",
+			);
+		const baseline = await deliveryBaseline(db, quote);
+		if (baseline) {
+			const [prior] = await db
+				.select()
+				.from(schema.quotes)
+				.where(eq(schema.quotes.id, baseline.quote.id))
+				.for("update");
+			if (prior.status !== "accepted")
+				throw new Error(
+					"A newer signed revision already replaced this agreement",
+				);
+			if (baseline.job) {
+				const [job] = await db
+					.select()
+					.from(schema.jobs)
+					.where(eq(schema.jobs.id, baseline.job.id))
+					.for("update");
+				if (
+					job.kind !== "project" ||
+					["completed", "closed"].includes(job.status)
+				)
+					throw new Error("This project requires a separate change review");
+			}
+			const ids = [...prior.lineItems, ...quote.lineItems].flatMap((l) =>
+				l.productId ? [l.productId] : [],
+			);
+			if (
+				ids.length &&
+				(
+					await db
+						.select()
+						.from(schema.products)
+						.where(
+							and(
+								inArray(schema.products.id, ids),
+								eq(schema.products.type, "stock"),
+							),
+						)
+				).length
+			)
+				throw new Error("Signed inventory changes require a separate order");
+			await db
+				.update(schema.quotes)
+				.set({ status: "superseded" })
+				.where(eq(schema.quotes.id, prior.id));
+		}
+		await reserveStock(db, quote, request.id, input.signerName);
 
-	const now = new Date();
-	const [row] = await db
-		.update(schema.quotes)
-		.set({
-			status: "accepted",
-			signedAt: now,
-			signerName: input.signerName,
-			signatureImage: input.signatureImage,
-			viewedAt: quote.viewedAt ?? now,
-		})
-		.where(eq(schema.quotes.id, quote.id))
-		.returning();
+		const now = new Date();
+		const [row] = await db
+			.update(schema.quotes)
+			.set({
+				status: "accepted",
+				signedAt: now,
+				signerName: input.signerName,
+				signatureImage: input.signatureImage,
+				viewedAt: quote.viewedAt ?? now,
+			})
+			.where(eq(schema.quotes.id, quote.id))
+			.returning();
 
-	await emitOrbyteEvent(db, {
-		businessId: quote.businessId,
-		requestId: request.id,
-		type: "esign.signed",
-		actor: input.signerName,
-		summary: `${input.signerName} signed ${quote.number}`,
+		await emitOrbyteEvent(db, {
+			businessId: quote.businessId,
+			requestId: request.id,
+			type: "esign.signed",
+			actor: input.signerName,
+			summary: `${input.signerName} signed ${quote.number}`,
+		});
+		await emitOrbyteEvent(db, {
+			businessId: quote.businessId,
+			requestId: request.id,
+			type: "quote.accepted",
+			actor: input.signerName,
+			summary: `${quote.number} accepted (${formatMYR(quote.totalSen)})`,
+		});
+		await db.insert(schema.messages).values({
+			conversationId: request.conversationId,
+			sender: "assistant",
+			body: signedThanks[request.brief.language](quote.number),
+		});
+		await enqueueTask(db, "create_handover", quote.id);
+		return row;
 	});
-	await reserveStock(quote, request.id, input.signerName);
-	await emitOrbyteEvent(db, {
-		businessId: quote.businessId,
-		requestId: request.id,
-		type: "quote.accepted",
-		actor: input.signerName,
-		summary: `${quote.number} accepted (${formatMYR(quote.totalSen)})`,
-	});
-	await db.insert(schema.messages).values({
-		conversationId: request.conversationId,
-		sender: "assistant",
-		body: signedThanks[request.brief.language](quote.number),
-	});
-	// Hand the job to its person in charge.
-	await startHandover(row, request).catch((err) =>
-		console.error("[handover] could not start", err),
-	);
-	return row;
 }
 
 /** A signed quote reserves its stock items so they are not promised twice. */
 async function reserveStock(
+	db: Database,
 	quote: typeof schema.quotes.$inferSelect,
 	requestId: string,
 	signerName: string,
 ) {
-	const db = getDb();
 	const qty = new Map<string, number>();
 	for (const l of quote.lineItems) {
 		if (l.productId)
@@ -1711,9 +2123,20 @@ async function reserveStock(
 				inArray(schema.products.id, [...qty.keys()]),
 				eq(schema.products.type, "stock"),
 			),
-		);
+		)
+		.orderBy(schema.products.id)
+		.for("update");
 	for (const p of items) {
 		const n = qty.get(p.id) ?? 0;
+		if (p.businessId !== quote.businessId || !Number.isInteger(n) || n <= 0)
+			throw new Error("Stock items need a valid quantity from this business");
+		if (p.stockOnHand - p.stockReserved < n)
+			throw new Error(
+				`${p.name} no longer has enough stock. Ask our team to update the quotation.`,
+			);
+		await db
+			.insert(schema.stockReservations)
+			.values({ quoteId: quote.id, productId: p.id, quantity: n });
 		await db
 			.update(schema.products)
 			.set({ stockReserved: sql`${schema.products.stockReserved} + ${n}` })

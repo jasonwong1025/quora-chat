@@ -182,6 +182,7 @@ function JobHeader({ job, onAsk }: { job: JobDetail; onAsk: () => void }) {
 	const save = async (patch: {
 		status?: "upcoming" | "active" | "completed" | "closed";
 		picId?: string | null;
+		acknowledgeAgreement?: boolean;
 	}) => {
 		if (!me) return toast.error("Choose who you are signed in as first");
 		try {
@@ -194,6 +195,26 @@ function JobHeader({ job, onAsk }: { job: JobDetail; onAsk: () => void }) {
 	};
 	return (
 		<header className="space-y-2 border-b bg-card px-4 py-3">
+			{job.agreementReviewRequired && (
+				<output className="block space-y-2 rounded-md bg-status-review/10 p-3 text-sm">
+					<p>
+						The customer signed a revised agreement. Review the new scope and
+						outstanding tasks before resuming work. Completed tasks have been
+						retained.
+					</p>
+					<Button
+						size="sm"
+						disabled={
+							!job.handover ||
+							update.isPending ||
+							(!me?.canApprove && me?.id !== job.picId)
+						}
+						onClick={() => save({ acknowledgeAgreement: true })}
+					>
+						I reviewed the scope and tasks
+					</Button>
+				</output>
+			)}
 			<Link
 				to="/orbyte/$businessId/work"
 				params={{ businessId: business.id }}
@@ -329,12 +350,14 @@ function HandoverTab({
 	const h = job.handover;
 
 	if (job.status === "preparing" || !h) {
-		const stuck = Date.now() - job.createdAt.getTime() > 90_000;
+		const failed = job.handoverTask?.status === "failed";
+		const stuck = failed || Date.now() - job.updatedAt.getTime() > 90_000;
 		return (
 			<div className="rounded-xl border bg-card p-8 text-center text-sm text-muted-foreground">
 				<Loader2 className="mx-auto mb-3 size-6 animate-spin text-[var(--orb-royal)]" />
-				The AI is reading the WhatsApp chat, requirement brief and signed quote
-				to write your handover pack…
+				{failed
+					? "The handover could not be prepared after several attempts. Retry it or ask your administrator to check the worker."
+					: "Your handover is queued or being prepared from the agreed requirements and signed quotation."}
 				{stuck && (
 					<Button
 						size="sm"
@@ -402,6 +425,15 @@ function HandoverTab({
 					<p className="text-sm">{h.customerNotes}</p>
 				</Card>
 			)}
+			{!!h.suggestedTasks?.length && (
+				<Card title="Suggested tasks for the revised scope">
+					<p className="mb-2 text-xs text-muted-foreground">
+						Review these suggestions alongside the retained task list before
+						adding or changing work.
+					</p>
+					<Bullets items={h.suggestedTasks} empty="" />
+				</Card>
+			)}
 
 			<Card title="Questions we asked the customer for you">
 				{job.relays.length === 0 ? (
@@ -450,7 +482,7 @@ function HandoverTab({
 				)}
 			</Card>
 
-			<Card title="Requirement brief (confirmed by the customer)">
+			<Card title="Requirement snapshot from the signed quotation">
 				<div className="grid gap-3 md:grid-cols-2">
 					{a.items.map(({ item, product, questions }) => (
 						<div key={item.id} className="rounded-lg border p-3 text-sm">
@@ -947,8 +979,9 @@ function Assistant({
 					Job assistant
 				</p>
 				<p className="mt-1 text-xs text-muted-foreground">
-					Knows the whole WhatsApp chat, the brief, the signed quote and files.
-					If the customer never said, it can ask them for you through sales.
+					Uses the signed quotation, captured requirements, agreement
+					conversation and file references. If the customer never said, it can
+					ask them for you through sales.
 				</p>
 			</div>
 			<div className="min-h-0 flex-1 space-y-3 overflow-y-auto p-4">

@@ -1,0 +1,769 @@
+import assert from "node:assert/strict";
+import { execFile } from "node:child_process";
+import { createServer } from "node:http";
+import { after, afterEach, before, test } from "node:test";
+import { promisify } from "node:util";
+import { and, eq, sql } from "drizzle-orm";
+import { getDb, schema } from "../../src/db/index";
+import { quoteReviewToken } from "../../src/lib/agreements";
+import { emptyBrief } from "../../src/lib/intake";
+import type { Reading } from "../../src/server/ai";
+import { updateJob, updateTask } from "../../src/server/jobs";
+import { createRequest, saveRequest } from "../../src/server/requirements";
+import { claimTask, finishTask } from "../../src/server/tasks";
+import { runNextTask } from "../../src/server/worker";
+import {
+	decideQuote,
+	draftNow,
+	editBrief,
+	handleCustomerMessage,
+	signQuote,
+} from "../../src/server/workflow";
+
+if (
+	process.env.QUORA_ISOLATED_DB_TEST !== "1" ||
+	!/^postgresql:\/\/quora_test@127\.0\.0\.1:\d+\/postgres$/.test(
+		process.env.DATABASE_URL ?? "",
+	)
+)
+	throw new Error("Use npm run test:db to run against an isolated database");
+
+let reading: Reading | null = null;
+let brokenHandover = false;
+let lastHandoverPrompt = "";
+let relayResult = {
+	answers: false,
+	answer: null as string | null,
+	changesScope: false,
+};
+const server = createServer(async (req, res) => {
+	let body = "";
+	for await (const chunk of req) body += chunk;
+	const input = JSON.parse(body);
+	const name = input.response_format?.json_schema?.name;
+	let content = "Please tell us the remaining detail.";
+	if (name === "requirement_brief") {
+		const matches = [
+			...input.messages.at(-1).content.matchAll(/\[([^\]]+)\] CUSTOMER/g),
+		];
+		content = JSON.stringify(reading).replaceAll(
+			'"LATEST"',
+			JSON.stringify(matches.at(-1)?.[1] ?? null),
+		);
+	}
+	if (name === "handover") {
+		lastHandoverPrompt = JSON.stringify(input.messages);
+		content = brokenHandover
+			? "invalid JSON"
+			: JSON.stringify({
+					title: "Customer project",
+					summary: "Build the agreed system",
+					scope: ["Agreed scope"],
+					requirements: [{ label: "Users", value: "50" }],
+					promises: [],
+					timeline: null,
+					watchOuts: [],
+					customerNotes: null,
+					tasks: [
+						"Review the approved requirements",
+						"Plan the work",
+						"Prepare the first delivery",
+					],
+				});
+	}
+	if (name === "relay_answer") content = JSON.stringify(relayResult);
+	res.setHeader("Content-Type", "application/json");
+	res.end(
+		JSON.stringify({
+			id: "local-test",
+			object: "chat.completion",
+			created: 1,
+			model: "local-test",
+			choices: [
+				{
+					index: 0,
+					finish_reason: "stop",
+					message: { role: "assistant", content },
+				},
+			],
+		}),
+	);
+});
+
+before(async () => {
+	await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+	const address = server.address();
+	if (!address || typeof address === "string")
+		throw new Error("Mock server did not start");
+	process.env.AI_BASE_URL = `http://127.0.0.1:${address.port}/v1`;
+	process.env.OPENROUTER_API_KEY = "local-test-only";
+});
+afterEach(async () => {
+	reading = null;
+	brokenHandover = false;
+	lastHandoverPrompt = "";
+	relayResult = { answers: false, answer: null, changesScope: false };
+	await getDb().delete(schema.workflowTasks);
+	await getDb().delete(schema.businesses);
+});
+after(async () => {
+	server.close();
+	await getDb().$client.end();
+});
+
+async function scenario(stock = false) {
+	const db = getDb();
+	const businessId = crypto.randomUUID();
+	await db.insert(schema.businesses).values({
+		id: businessId,
+		name: "Kodkraf test",
+		quotePrefix: businessId.slice(0, 6),
+		industry: "Software",
+	});
+	const [staff] = await db
+		.insert(schema.staff)
+		.values({
+			businessId,
+			name: "Sales owner",
+			role: "Owner",
+			canApprove: true,
+		})
+		.returning();
+	const [other] = await db
+		.insert(schema.staff)
+		.values({ businessId, name: "Team member", role: "PIC", canApprove: false })
+		.returning();
+	const [product] = await db
+		.insert(schema.products)
+		.values({
+			id: crypto.randomUUID(),
+			businessId,
+			sku: "SYSTEM",
+			name: stock ? "Test stock" : "Custom system",
+			category: "Systems",
+			description: "Agreed system",
+			unit: stock ? "unit" : "job",
+			unitPriceSen: 50000,
+			pricingMode: stock ? "fixed" : "custom",
+			type: stock ? "stock" : "service",
+			stockOnHand: 3,
+		})
+		.returning();
+	await db.insert(schema.intakeQuestions).values({
+		businessId,
+		scope: "product",
+		productId: product.id,
+		key: "users",
+		label: "How many users?",
+		type: "number",
+		required: true,
+		onQuote: true,
+	});
+	const [conversation] = await db
+		.insert(schema.conversations)
+		.values({ businessId, customerName: "Client" })
+		.returning();
+	const createdAt = new Date(Date.now() - 1000);
+	const [message] = await db
+		.insert(schema.messages)
+		.values({
+			conversationId: conversation.id,
+			sender: "customer",
+			body: "A system for 50 users",
+			createdAt: new Date(Date.now() - 500),
+		})
+		.returning();
+	const brief = {
+		...emptyBrief(),
+		summary: "System for 50 users",
+		items: [
+			{
+				id: "item",
+				productId: product.id,
+				match: "exact" as const,
+				candidateProductIds: [],
+				rawText: "custom system",
+				quantity: 1,
+				answers: {
+					users: {
+						values: ["50"],
+						source: "customer" as const,
+						state: "known" as const,
+						at: message.createdAt.toISOString(),
+						messageId: message.id,
+					},
+				},
+			},
+		],
+	};
+	const request = await createRequest({
+		businessId,
+		conversationId: conversation.id,
+		status: "gathering",
+		brief,
+		processedMessageId: message.id,
+		createdAt,
+	});
+	return { businessId, staff, other, product, conversation, message, request };
+}
+async function draft(s: Awaited<ReturnType<typeof scenario>>) {
+	await draftNow({ requestId: s.request.id, staffId: s.staff.id });
+	const quote = await getDb().query.quotes.findFirst({
+		where: eq(schema.quotes.requestId, s.request.id),
+	});
+	assert.ok(quote);
+	return quote;
+}
+async function approve(s: Awaited<ReturnType<typeof scenario>>) {
+	const quote = await draft(s);
+	return decideQuote({
+		quoteId: quote.id,
+		staffId: s.staff.id,
+		decision: "approved",
+		reviewToken: quoteReviewToken(quote),
+	});
+}
+const signature = (quoteId: string) => ({
+	quoteId,
+	signerName: "Client",
+	signatureImage: "data:image/png;base64,dGVzdA==",
+});
+
+test("migration retains legacy records without inventing a confirmed snapshot", async () => {
+	const request = await getDb().query.quoteRequests.findFirst({
+		where: eq(schema.quoteRequests.id, "legacy-request"),
+	});
+	const quote = await getDb().query.quotes.findFirst({
+		where: eq(schema.quotes.id, "legacy-quote"),
+	});
+	assert.equal(request?.brief.summary, "Legacy requirements");
+	assert.equal(request?.briefVersion, 1);
+	assert.equal(quote?.requirementsSnapshot, null);
+	assert.equal(
+		(await getDb().select().from(schema.requirementVersions)).length,
+		1,
+	);
+});
+
+test("requirement edits invalidate drafts and old review screens", async () => {
+	const s = await scenario();
+	const old = await draft(s);
+	const edited = await editBrief({
+		requestId: s.request.id,
+		staffId: s.staff.id,
+		expectedVersion: 1,
+		edit: { kind: "answer", itemId: "item", key: "users", values: ["100"] },
+	});
+	assert.equal(edited.briefVersion, 2);
+	await assert.rejects(
+		decideQuote({
+			quoteId: old.id,
+			staffId: s.staff.id,
+			decision: "approved",
+			reviewToken: quoteReviewToken(old),
+		}),
+		/Requirements changed/,
+	);
+	const current = await draft(s);
+	assert.equal(current.requirementVersion, 2);
+	assert.deepEqual(
+		current.requirementsSnapshot?.items[0].answers.users.values,
+		["100"],
+	);
+	await assert.rejects(
+		decideQuote({
+			quoteId: current.id,
+			staffId: s.staff.id,
+			decision: "approved",
+			reviewToken: quoteReviewToken(old),
+		}),
+		/quotation changed/,
+	);
+	await decideQuote({
+		quoteId: current.id,
+		staffId: s.staff.id,
+		decision: "approved",
+		reviewToken: quoteReviewToken(current),
+	});
+	assert.equal(
+		(
+			await getDb().query.requirementVersions.findMany({
+				where: eq(schema.requirementVersions.requestId, s.request.id),
+			})
+		).length,
+		2,
+	);
+});
+
+test("concurrent requirement edits cannot overwrite each other", async () => {
+	const s = await scenario();
+	const a = structuredClone(s.request.brief);
+	a.items[0].quantity = 2;
+	const b = structuredClone(s.request.brief);
+	b.items[0].quantity = 3;
+	const results = await Promise.allSettled([
+		saveRequest(s.request.id, { brief: a }, 1),
+		saveRequest(s.request.id, { brief: b }, 1),
+	]);
+	assert.equal(results.filter((r) => r.status === "fulfilled").length, 1);
+	assert.equal(results.filter((r) => r.status === "rejected").length, 1);
+});
+
+test("a newly arrived unprocessed customer message blocks approval", async () => {
+	const s = await scenario();
+	const quote = await draft(s);
+	await getDb().insert(schema.messages).values({
+		conversationId: s.conversation.id,
+		sender: "customer",
+		body: "Actually we need 500 users",
+	});
+	await assert.rejects(
+		decideQuote({
+			quoteId: quote.id,
+			staffId: s.staff.id,
+			decision: "approved",
+			reviewToken: quoteReviewToken(quote),
+		}),
+		/not been reviewed/,
+	);
+});
+
+test("an unrelated customer reply cannot silently resolve an AI follow-up", async () => {
+	const s = await scenario();
+	const brief = structuredClone(s.request.brief);
+	brief.followUps.push({
+		id: "followup",
+		question: "Do all users need access at once?",
+		from: "ai",
+		answer: null,
+		asked: true,
+		at: new Date().toISOString(),
+	});
+	await saveRequest(s.request.id, { brief }, 1);
+	reading = {
+		language: "en",
+		summary: brief.summary,
+		items: [
+			{
+				ref: "item",
+				productId: s.product.id,
+				match: "exact",
+				candidateProductIds: [],
+				rawText: "custom system",
+				quantity: 1,
+				removed: false,
+				reason: "Customer requested it",
+				answers: [
+					{
+						key: "users",
+						values: ["50"],
+						state: "known",
+						evidenceMessageId: s.message.id,
+					},
+				],
+			},
+		],
+		general: [],
+		followUpAnswers: [],
+		followUp: null,
+		confirmation: "none",
+		wantsChange: false,
+		customerQuestion: "Where are you?",
+		reasoning: ["A side question"],
+	};
+	for await (const _ of handleCustomerMessage({
+		conversationId: s.conversation.id,
+		body: "By the way where are you?",
+	})) {
+		/* drain the workflow */
+	}
+	const updated = await getDb().query.quoteRequests.findFirst({
+		where: eq(schema.quoteRequests.id, s.request.id),
+	});
+	assert.equal(updated?.brief.followUps[0].answer, null);
+	assert.equal(updated?.status, "gathering");
+	await assert.rejects(
+		draftNow({ requestId: s.request.id, staffId: s.staff.id }),
+		/Resolve or explicitly waive/,
+	);
+});
+
+test("waivers require an approver, a reason, and remain in the captured agreement", async () => {
+	const s = await scenario();
+	await assert.rejects(
+		editBrief({
+			requestId: s.request.id,
+			staffId: s.other.id,
+			edit: {
+				kind: "skip",
+				itemId: "item",
+				key: "users",
+				reason: "Measure later",
+			},
+		}),
+		/Only an approver/,
+	);
+	await assert.rejects(
+		editBrief({
+			requestId: s.request.id,
+			staffId: s.staff.id,
+			edit: { kind: "skip", itemId: "item", key: "users", reason: "" },
+		}),
+		/Explain why/,
+	);
+	await editBrief({
+		requestId: s.request.id,
+		staffId: s.staff.id,
+		edit: {
+			kind: "skip",
+			itemId: "item",
+			key: "users",
+			reason: "Confirm during paid discovery",
+		},
+	});
+	const quote = await draft(s);
+	assert.equal(
+		quote.requirementsSnapshot?.items[0].answers.users.waiverReason,
+		"Confirm during paid discovery",
+	);
+});
+
+test("signing rolls back completely if stock is no longer available", async () => {
+	const s = await scenario(true);
+	const quote = await approve(s);
+	await getDb()
+		.update(schema.products)
+		.set({ stockOnHand: 0 })
+		.where(eq(schema.products.id, s.product.id));
+	await assert.rejects(signQuote(signature(quote.id)), /enough stock/);
+	assert.equal(
+		(
+			await getDb().query.quotes.findFirst({
+				where: eq(schema.quotes.id, quote.id),
+			})
+		)?.status,
+		"approved",
+	);
+	assert.equal(
+		(await getDb().select().from(schema.stockReservations)).length,
+		0,
+	);
+	assert.equal((await getDb().select().from(schema.workflowTasks)).length, 0);
+});
+
+test("duplicate signing reserves once and a restarted worker completes one handover", async () => {
+	const s = await scenario(true);
+	const quote = await approve(s);
+	await Promise.all([
+		signQuote(signature(quote.id)),
+		signQuote(signature(quote.id)),
+	]);
+	assert.equal(
+		(
+			await getDb().query.products.findFirst({
+				where: eq(schema.products.id, s.product.id),
+			})
+		)?.stockReserved,
+		1,
+	);
+	assert.equal(
+		(await getDb().select().from(schema.stockReservations)).length,
+		1,
+	);
+	const abandoned = await claimTask();
+	assert.ok(abandoned);
+	await getDb()
+		.update(schema.workflowTasks)
+		.set({ lockedUntil: new Date(0) })
+		.where(eq(schema.workflowTasks.id, abandoned.id));
+	await promisify(execFile)(
+		process.execPath,
+		["--import", "tsx", "scripts/worker.ts", "--once"],
+		{ env: process.env },
+	);
+	await assert.rejects(
+		getDb().transaction((tx) =>
+			finishTask(tx, { id: abandoned.id, token: abandoned.token }),
+		),
+		/lease was replaced/,
+	);
+	const jobs = await getDb().select().from(schema.jobs);
+	assert.equal(jobs.length, 1);
+	assert.equal(jobs[0].status, "upcoming");
+	assert.equal((await getDb().select().from(schema.jobTasks)).length, 3);
+	assert.equal((await getDb().select().from(schema.notifications)).length, 1);
+	await promisify(execFile)(
+		process.execPath,
+		["--import", "tsx", "scripts/worker.ts", "--once"],
+		{ env: process.env },
+	);
+	assert.equal((await getDb().select().from(schema.notifications)).length, 1);
+	await updateJob({
+		jobId: jobs[0].id,
+		staffId: s.staff.id,
+		status: "completed",
+	});
+	await getDb()
+		.update(schema.products)
+		.set({ stockReserved: 1 })
+		.where(eq(schema.products.id, s.product.id));
+	await updateJob({ jobId: jobs[0].id, staffId: s.staff.id, status: "active" });
+	await updateJob({
+		jobId: jobs[0].id,
+		staffId: s.staff.id,
+		status: "completed",
+	});
+	const product = await getDb().query.products.findFirst({
+		where: eq(schema.products.id, s.product.id),
+	});
+	assert.equal(product?.stockOnHand, 2);
+	assert.equal(product?.stockReserved, 1);
+});
+
+test("failed model work retries without losing the signed job or duplicating tasks", async () => {
+	const s = await scenario();
+	const quote = await approve(s);
+	await signQuote(signature(quote.id));
+	await runNextTask();
+	brokenHandover = true;
+	await runNextTask();
+	const [task] = await getDb()
+		.select()
+		.from(schema.workflowTasks)
+		.where(eq(schema.workflowTasks.kind, "prepare_handover"));
+	assert.equal(task.status, "pending");
+	assert.equal(task.attempts, 1);
+	assert.equal((await getDb().select().from(schema.jobTasks)).length, 0);
+	brokenHandover = false;
+	await getDb()
+		.update(schema.workflowTasks)
+		.set({ runAfter: new Date(0) })
+		.where(eq(schema.workflowTasks.id, task.id));
+	await runNextTask();
+	assert.equal((await getDb().select().from(schema.jobTasks)).length, 3);
+	assert.match(lastHandoverPrompt, /50/);
+	assert.equal((await getDb().select().from(schema.notifications)).length, 1);
+	const completed = await getDb()
+		.select()
+		.from(schema.workflowTasks)
+		.where(
+			and(
+				eq(schema.workflowTasks.kind, "prepare_handover"),
+				sql`status = 'done'`,
+			),
+		);
+	assert.equal(completed.length, 1);
+});
+
+test("a signed project revision retains the job, protects completed tasks, and requires PIC review", async () => {
+	const s = await scenario();
+	const original = await approve(s);
+	await signQuote(signature(original.id));
+	await runNextTask();
+	await runNextTask();
+	const [job] = await getDb().select().from(schema.jobs);
+	const tasks = await getDb().select().from(schema.jobTasks);
+	await updateTask({ taskId: tasks[0].id, status: "done" });
+	await updateJob({ jobId: job.id, staffId: s.staff.id, status: "active" });
+	const [relay] = await getDb()
+		.insert(schema.relays)
+		.values({
+			businessId: s.businessId,
+			jobId: job.id,
+			conversationId: s.conversation.id,
+			askedById: s.staff.id,
+			question: "How will staff use the system?",
+			draft: "How will your staff use it?",
+			status: "sent",
+			sentAt: new Date(),
+		})
+		.returning();
+	relayResult = {
+		answers: true,
+		answer: "They also want 100 users",
+		changesScope: true,
+	};
+	reading = {
+		language: "en",
+		summary: "System for 100 users",
+		items: [
+			{
+				ref: "item",
+				productId: s.product.id,
+				match: "exact",
+				candidateProductIds: [],
+				rawText: "custom system",
+				quantity: 1,
+				removed: false,
+				reason: "Customer requested more users",
+				answers: [
+					{
+						key: "users",
+						values: ["100"],
+						state: "known",
+						evidenceMessageId: "LATEST",
+					},
+				],
+			},
+		],
+		general: [],
+		followUpAnswers: [],
+		followUp: null,
+		confirmation: "changed",
+		wantsChange: true,
+		customerQuestion: null,
+		reasoning: ["A change to the signed scope"],
+	};
+	for await (const _ of handleCustomerMessage({
+		conversationId: s.conversation.id,
+		body: "Actually change the system to support 100 users",
+	})) {
+		/* drain */
+	}
+	const requests = await getDb().query.quoteRequests.findMany({
+		where: eq(schema.quoteRequests.conversationId, s.conversation.id),
+	});
+	const change = requests.find((r) => r.id !== s.request.id);
+	assert.ok(change);
+	assert.equal(
+		(
+			await getDb().query.relays.findFirst({
+				where: eq(schema.relays.id, relay.id),
+			})
+		)?.status,
+		"sent",
+	);
+	assert.equal(change.brief.revisionOf, original.id);
+	assert.deepEqual(
+		requests.find((r) => r.id === s.request.id)?.brief.items[0].answers.users
+			.values,
+		["50"],
+	);
+	await draftNow({ requestId: change.id, staffId: s.staff.id });
+	const revision = await getDb().query.quotes.findFirst({
+		where: eq(schema.quotes.requestId, change.id),
+	});
+	assert.ok(revision);
+	await decideQuote({
+		quoteId: revision.id,
+		staffId: s.staff.id,
+		decision: "approved",
+		reviewToken: quoteReviewToken(revision),
+	});
+	assert.equal(
+		(
+			await getDb().query.quotes.findFirst({
+				where: eq(schema.quotes.id, original.id),
+			})
+		)?.status,
+		"accepted",
+	);
+	await signQuote(signature(revision.id));
+	await assert.rejects(
+		updateTask({ taskId: tasks[1].id, status: "active" }),
+		/revised agreement handover/,
+	);
+	await assert.rejects(
+		updateJob({ jobId: job.id, staffId: s.staff.id, status: "completed" }),
+		/signed revision/,
+	);
+	await runNextTask();
+	await runNextTask();
+	const jobs = await getDb().select().from(schema.jobs);
+	assert.equal(jobs.length, 1);
+	assert.equal(jobs[0].id, job.id);
+	assert.equal(jobs[0].quoteId, revision.id);
+	assert.equal(jobs[0].agreementReviewRequired, true);
+	const retained = await getDb().select().from(schema.jobTasks);
+	assert.equal(retained.length, tasks.length);
+	assert.equal(retained.find((t) => t.id === tasks[0].id)?.status, "done");
+	assert.equal(retained.filter((t) => t.status === "blocked").length, 2);
+	assert.ok(jobs[0].handover?.suggestedTasks?.length);
+	await assert.rejects(
+		updateTask({ taskId: tasks[1].id, status: "active" }),
+		/Review the revised agreement/,
+	);
+	await assert.rejects(
+		updateJob({ jobId: job.id, staffId: s.staff.id, status: "active" }),
+		/Review the revised agreement/,
+	);
+	await updateJob({
+		jobId: job.id,
+		staffId: s.staff.id,
+		acknowledgeAgreement: true,
+		status: "active",
+	});
+	assert.equal(
+		(await getDb().query.jobs.findFirst({ where: eq(schema.jobs.id, job.id) }))
+			?.agreementReviewRequired,
+		false,
+	);
+	assert.match(lastHandoverPrompt, /100/);
+});
+
+test("handover uses captured names and answers even if presets or the live brief change", async () => {
+	const s = await scenario();
+	const quote = await approve(s);
+	await signQuote(signature(quote.id));
+	const changed = structuredClone(s.request.brief);
+	changed.items[0].answers.users.values = ["999"];
+	await getDb()
+		.update(schema.quoteRequests)
+		.set({ brief: changed })
+		.where(eq(schema.quoteRequests.id, s.request.id));
+	await getDb()
+		.delete(schema.intakeQuestions)
+		.where(eq(schema.intakeQuestions.businessId, s.businessId));
+	await getDb().insert(schema.messages).values({
+		conversationId: s.conversation.id,
+		sender: "customer",
+		body: "UNAPPROVED_PROMISE_999",
+	});
+	await runNextTask();
+	await runNextTask();
+	assert.match(lastHandoverPrompt, /How many users/);
+	assert.match(lastHandoverPrompt, /50/);
+	assert.doesNotMatch(lastHandoverPrompt, /999|UNAPPROVED_PROMISE/);
+});
+
+test("rapid signed revisions discard obsolete handovers and retain one project", async () => {
+	const s = await scenario();
+	const original = await approve(s);
+	await signQuote(signature(original.id));
+	await runNextTask(); // Create the project, leaving its first briefing queued.
+	let prior = original;
+	for (const users of ["100", "200"]) {
+		const brief = structuredClone(s.request.brief);
+		brief.revisionOf = prior.id;
+		brief.items[0].answers.users.values = [users];
+		const request = await createRequest({
+			businessId: s.businessId,
+			conversationId: s.conversation.id,
+			status: "gathering",
+			brief,
+			processedMessageId: s.message.id,
+		});
+		const quote = await draft({ ...s, request });
+		prior = await decideQuote({
+			quoteId: quote.id,
+			staffId: s.staff.id,
+			decision: "approved",
+			reviewToken: quoteReviewToken(quote),
+		});
+		await signQuote(signature(quote.id));
+	}
+	for (let i = 0; i < 10 && (await runNextTask()); i++) {
+		/* drain due work */
+	}
+	const jobs = await getDb().select().from(schema.jobs);
+	assert.equal(jobs.length, 1);
+	assert.equal(jobs[0].quoteId, prior.id);
+	assert.equal(jobs[0].agreementReviewRequired, true);
+	assert.equal((await getDb().select().from(schema.notifications)).length, 1);
+	assert.equal(
+		(await getDb().select().from(schema.workflowTasks)).filter(
+			(t) => t.status !== "done",
+		).length,
+		0,
+	);
+});

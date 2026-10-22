@@ -6,6 +6,7 @@ import { Button } from "#/components/ui/button";
 import { Input } from "#/components/ui/input";
 import { Textarea } from "#/components/ui/textarea";
 import type { LineItem } from "#/db/schema";
+import { quoteReviewToken } from "#/lib/agreements";
 import { formatMYR, parseMYR } from "#/lib/money";
 import type { BusinessDetail, RequestRow, Staff } from "#/lib/types";
 import { orpc } from "#/orpc/client";
@@ -25,6 +26,7 @@ export function QuoteEditor(props: {
 	business: BusinessDetail;
 	quote: Quote;
 	actingAs: Staff | undefined;
+	onHold?: string | null;
 }) {
 	const { business, quote, actingAs } = props;
 	const queryClient = useQueryClient();
@@ -41,7 +43,7 @@ export function QuoteEditor(props: {
 		orpc.quotes.decide.mutationOptions({ onSuccess: invalidate }),
 	);
 
-	const editable = quote.status === "draft";
+	const editable = quote.status === "draft" && !props.onHold;
 	const subtotal = lines.reduce((s, l) => s + l.amountSen, 0);
 	const sst = business.sstRegistered
 		? Math.round((subtotal * business.sstRateBps) / 10000)
@@ -63,24 +65,31 @@ export function QuoteEditor(props: {
 	}
 
 	async function save() {
-		if (!actingAs) return toast.error("Choose who you are acting as first");
-		await update.mutateAsync({
+		if (!actingAs) {
+			toast.error("Choose who you are acting as first");
+			return;
+		}
+		const saved = await update.mutateAsync({
 			quoteId: quote.id,
 			staffId: actingAs.id,
 			lineItems: lines,
 			notes: notes.trim() || null,
+			reviewToken: quoteReviewToken(quote),
 		});
 		setDirty(false);
+		return saved;
 	}
 
 	async function act(decision: "approved" | "rejected") {
 		if (!actingAs) return toast.error("Choose who you are acting as first");
 		try {
-			if (dirty) await save();
+			const reviewed = dirty ? await save() : quote;
+			if (!reviewed) return;
 			await decide.mutateAsync({
 				quoteId: quote.id,
 				staffId: actingAs.id,
 				decision,
+				reviewToken: quoteReviewToken(reviewed),
 			});
 			toast.success(
 				decision === "approved"
@@ -94,6 +103,11 @@ export function QuoteEditor(props: {
 
 	return (
 		<div className="rounded-lg border">
+			{props.onHold && (
+				<output className="block border-b bg-status-review/10 p-3 text-sm">
+					{props.onHold}
+				</output>
+			)}
 			<div className="flex items-center justify-between border-b px-3 py-2">
 				<p className="text-sm font-semibold">
 					{quote.number}{" "}
