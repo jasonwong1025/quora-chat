@@ -17,6 +17,8 @@ const rpc = new RPCHandler(router, {
 			// answer for the client, not a server fault; log it briefly.
 			if (error instanceof ORPCError && error.code === "NOT_FOUND")
 				console.warn("[orpc] not found:", error.message);
+			// The browser gave up on the request; nothing went wrong on our side.
+			else if ((error as { code?: string })?.code === "ECONNRESET") return;
 			else console.error("[orpc]", error);
 		}),
 	],
