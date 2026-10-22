@@ -226,7 +226,9 @@ function Shell() {
 	);
 
 	return (
-		<div className="orbyte flex h-dvh overflow-hidden">
+		// `relative` on the shell and <main>: absolutely positioned bits (e.g. screen-reader
+		// text in table rows) otherwise anchor to the page and stretch it past the viewport.
+		<div className="orbyte relative flex h-dvh overflow-hidden">
 			<aside className="hidden w-64 shrink-0 lg:block">{sidebar}</aside>
 			{open && (
 				<div className="fixed inset-0 z-40 flex lg:hidden">
@@ -249,7 +251,7 @@ function Shell() {
 					<img src="/orbyte-icon.png" alt="" className="size-6" />
 					<span className="truncate font-semibold">{business.name}</span>
 				</header>
-				<main className="min-h-0 flex-1 overflow-y-auto">
+				<main className="relative min-h-0 flex-1 overflow-y-auto">
 					<Outlet />
 				</main>
 			</div>

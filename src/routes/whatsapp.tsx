@@ -50,7 +50,7 @@ function WhatsappPortal() {
 		navigate({ search: { chat }, replace: true });
 
 	return (
-		<div className="wa flex h-dvh overflow-hidden">
+		<div className="wa relative flex h-dvh overflow-hidden">
 			{!profile || chats.isPending ? (
 				<div className="flex flex-1 items-center justify-center text-sm text-[var(--wa-muted)]">
 					Loading chats…

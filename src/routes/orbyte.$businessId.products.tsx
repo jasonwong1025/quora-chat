@@ -235,11 +235,13 @@ function Products() {
 					</div>
 
 					<div className="overflow-x-auto rounded-xl border bg-card">
-						<table className="w-full min-w-[980px] table-fixed text-sm">
+						{/* The fixed columns add up to ~910px; the minimum width leaves the
+						    Name column ~250px so names don't wrap one letter per line. */}
+						<table className="w-full min-w-[1160px] table-fixed text-sm">
 							<colgroup>
 								<col className="w-20" />
 								<col />
-								<col className="w-44" />
+								<col className="w-40" />
 								<col className="w-48" />
 								<col className="w-36" />
 								<col className="w-24" />
