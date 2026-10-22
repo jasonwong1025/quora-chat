@@ -813,6 +813,9 @@ export async function fastForward(businessId: string, days: number) {
 			sql`update job_chat set created_at = created_at - ${shift} where job_id in (select id from jobs where business_id = ${businessId})`,
 		);
 		await tx.execute(
+			sql`update job_members set created_at = created_at - ${shift} where job_id in (select id from jobs where business_id = ${businessId})`,
+		);
+		await tx.execute(
 			sql`update relays set created_at = created_at - ${shift}, sent_at = sent_at - ${shift}, answered_at = answered_at - ${shift} where business_id = ${businessId}`,
 		);
 		await tx.execute(

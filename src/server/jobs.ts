@@ -1,12 +1,15 @@
 /**
  * After the customer signs: hand the job to a person in charge (PIC).
- * Mirrors Orbyte's Clients → Projects → Tasks. The PIC never talks to the
- * customer; questions go through sales approval and Quora Chat.
+ * Mirrors Orbyte's Clients → Projects → Tasks. Each job has an internal team
+ * group (PIC, assigned workers and the AI, which answers when tagged @AI).
+ * The team never talks to the customer; questions go through sales approval
+ * and Quora Chat.
  */
 import { and, asc, count, desc, eq, inArray, sql } from "drizzle-orm";
 import { type Database, getDb, schema } from "#/db";
 import type { BotAction, BotSource, Handover } from "#/db/schema";
 import { answerText } from "#/lib/intake";
+import { AI_MENTION, findMentions, withoutAiTag } from "#/lib/mentions";
 import { formatMYR } from "#/lib/money";
 import {
 	answerJobQuestion,
@@ -136,6 +139,11 @@ export async function startHandover(
 						sql`${schema.jobTasks.status} <> 'done'`,
 					),
 				);
+			await postSystem(
+				db,
+				previousJob.id,
+				`The customer signed a revised agreement (${quote.number}). Outstanding tasks are blocked until the PIC reviews the new scope.`,
+			);
 			await emitOrbyteEvent(db, {
 				businessId: quote.businessId,
 				requestId: request.id,
@@ -246,6 +254,7 @@ export async function startHandover(
 				picId,
 			})
 			.returning();
+		if (picId) await joinGroup(db, job.id, picId, null);
 
 		await emitOrbyteEvent(db, {
 			businessId: business.id,
@@ -446,12 +455,27 @@ export async function buildHandover(
 			summary: `Handover pack ready for ${job.number} (${tasks.length} starting tasks)`,
 			payload: { jobId: job.id },
 		});
+		// The AI opens the team group with the briefing, so everyone starts from it.
+		await db.insert(schema.jobChat).values({
+			jobId: job.id,
+			role: "assistant",
+			body: `${current.agreementReviewRequired ? "The revised handover is ready" : "Handover pack is ready"}. ${handover.summary}\n\nI've read the whole customer chat, the signed quotation and the requirements. Tag @AI here with any question about this job. If the customer never said, I can draft a question for sales to send them.`,
+			sources: [{ kind: "handover", label: "Handover pack" }],
+		});
+		const members = await loadMembers(db, job.id);
 		await notify(db, {
 			businessId: job.businessId,
-			staffIds: [job.picId],
+			staffIds: [current.picId],
 			title: `New ${jobKindLabel[job.kind].toLowerCase()}: ${job.number}`,
 			body: `You're the PIC for "${title}". The handover pack and chat history are ready.`,
 			link: jobLink(job.businessId, job.id),
+		});
+		await notify(db, {
+			businessId: job.businessId,
+			staffIds: members.map((m) => m.id).filter((id) => id !== current.picId),
+			title: `Handover ready: ${job.number}`,
+			body: `The handover pack for "${title}" is ready in the team chat.`,
+			link: teamLink(job),
 		});
 	});
 }
@@ -538,6 +562,14 @@ export async function updateJob(input: {
 				? await loadStaff(input.picId, job.businessId)
 				: null;
 			patch.picId = pic?.id ?? null;
+			if (pic) await joinGroup(db, job.id, pic.id, member.id);
+			await postSystem(
+				db,
+				job.id,
+				pic
+					? `${member.name} made ${pic.name} the person in charge`
+					: `${member.name} unassigned the person in charge`,
+			);
 			await emitOrbyteEvent(db, {
 				businessId: job.businessId,
 				requestId: job.requestId,
@@ -743,7 +775,7 @@ export async function updateTask(input: {
 	});
 }
 
-// --- The PIC's chatbot ----------------------------------------------------------------------
+// --- What the AI knows about the job -------------------------------------------------------
 
 function handoverText(h: Handover | null) {
 	if (!h) return "(not ready yet)";
@@ -758,15 +790,211 @@ function handoverText(h: Handover | null) {
 	].join("\n");
 }
 
-export async function askJobAssistant(input: {
+// --- The team group chat --------------------------------------------------------------------
+
+type Job = typeof schema.jobs.$inferSelect;
+type StaffMember = typeof schema.staff.$inferSelect;
+
+/** People in the job's group, in the order they joined. */
+export async function loadMembers(db: Database, jobId: string) {
+	return db
+		.select({
+			id: schema.staff.id,
+			name: schema.staff.name,
+			role: schema.staff.role,
+			canApprove: schema.staff.canApprove,
+		})
+		.from(schema.jobMembers)
+		.innerJoin(schema.staff, eq(schema.staff.id, schema.jobMembers.staffId))
+		.where(eq(schema.jobMembers.jobId, jobId))
+		.orderBy(asc(schema.jobMembers.createdAt));
+}
+
+/** Puts someone in the job's group. Returns false if they were already in it. */
+async function joinGroup(
+	db: Database,
+	jobId: string,
+	staffId: string,
+	addedById: string | null,
+) {
+	const rows = await db
+		.insert(schema.jobMembers)
+		.values({ jobId, staffId, addedById })
+		.onConflictDoNothing()
+		.returning({ id: schema.jobMembers.id });
+	return rows.length > 0;
+}
+
+/** A line in the group about what happened, e.g. "Aina added Lim". */
+async function postSystem(db: Database, jobId: string, body: string) {
+	await db.insert(schema.jobChat).values({ jobId, role: "system", body });
+}
+
+const canManageGroup = (job: Job, member: StaffMember) =>
+	member.canApprove || member.id === job.picId;
+
+const teamLink = (job: Job) => `${jobLink(job.businessId, job.id)}?tab=team`;
+
+export async function addJobMember(input: {
 	jobId: string;
 	staffId: string;
+	memberId: string;
+}) {
+	return getDb().transaction(async (db) => {
+		const [job] = await db
+			.select()
+			.from(schema.jobs)
+			.where(eq(schema.jobs.id, input.jobId))
+			.for("update");
+		if (!job) throw new Error("Job not found");
+		const actor = await loadStaff(input.staffId, job.businessId);
+		if (!canManageGroup(job, actor))
+			throw new Error("Only the PIC or an approver can add people to this job");
+		const target = await loadStaff(input.memberId, job.businessId);
+		if (!(await joinGroup(db, job.id, target.id, actor.id)))
+			throw new Error(`${target.name} is already in this job's group`);
+		await postSystem(db, job.id, `${actor.name} added ${target.name}`);
+		await emitOrbyteEvent(db, {
+			businessId: job.businessId,
+			requestId: job.requestId,
+			type: "job.member_added",
+			actor: actor.name,
+			summary: `${actor.name} added ${target.name} to ${job.number}`,
+		});
+		if (target.id !== actor.id)
+			await notify(db, {
+				businessId: job.businessId,
+				staffIds: [target.id],
+				title: `You were added to ${job.number}`,
+				body: `${actor.name} added you to "${job.title}". Tag @AI in the team chat to ask about the job.`,
+				link: teamLink(job),
+			});
+		return { ok: true };
+	});
+}
+
+export async function removeJobMember(input: {
+	jobId: string;
+	staffId: string;
+	memberId: string;
+}) {
+	return getDb().transaction(async (db) => {
+		const [job] = await db
+			.select()
+			.from(schema.jobs)
+			.where(eq(schema.jobs.id, input.jobId))
+			.for("update");
+		if (!job) throw new Error("Job not found");
+		const actor = await loadStaff(input.staffId, job.businessId);
+		const leaving = input.memberId === actor.id;
+		if (!leaving && !canManageGroup(job, actor))
+			throw new Error(
+				"Only the PIC or an approver can remove people from this job",
+			);
+		if (input.memberId === job.picId)
+			throw new Error(
+				"Assign another person in charge before removing the PIC",
+			);
+		const target = await loadStaff(input.memberId, job.businessId);
+		const removed = await db
+			.delete(schema.jobMembers)
+			.where(
+				and(
+					eq(schema.jobMembers.jobId, job.id),
+					eq(schema.jobMembers.staffId, target.id),
+				),
+			)
+			.returning({ id: schema.jobMembers.id });
+		if (!removed.length)
+			throw new Error(`${target.name} is not in this job's group`);
+		await postSystem(
+			db,
+			job.id,
+			leaving
+				? `${target.name} left the group`
+				: `${actor.name} removed ${target.name}`,
+		);
+		await emitOrbyteEvent(db, {
+			businessId: job.businessId,
+			requestId: job.requestId,
+			type: "job.member_removed",
+			actor: actor.name,
+			summary: leaving
+				? `${target.name} left ${job.number}`
+				: `${actor.name} removed ${target.name} from ${job.number}`,
+		});
+		return { ok: true };
+	});
+}
+
+/**
+ * A teammate posts in the job's group. Tagged teammates are notified, and the
+ * AI only answers when the message tags @AI.
+ */
+export async function postJobMessage(input: {
+	jobId: string;
+	staffId: string;
+	body: string;
+}) {
+	const db = getDb();
+	const body = input.body.trim();
+	if (!body) throw new Error("Type a message");
+	const job = await db.query.jobs.findFirst({
+		where: eq(schema.jobs.id, input.jobId),
+	});
+	if (!job) throw new Error("Job not found");
+	const member = await loadStaff(input.staffId, job.businessId);
+	const members = await loadMembers(db, job.id);
+	if (!members.some((m) => m.id === member.id))
+		throw new Error(
+			"Only people in this job's group can post. Ask the PIC or an approver to add you.",
+		);
+	const history = await db
+		.select()
+		.from(schema.jobChat)
+		.where(eq(schema.jobChat.jobId, job.id))
+		.orderBy(asc(schema.jobChat.createdAt));
+	const mentions = findMentions(body, members);
+	const [message] = await db
+		.insert(schema.jobChat)
+		.values({
+			jobId: job.id,
+			role: "staff",
+			authorId: member.id,
+			authorName: member.name,
+			body,
+			mentions,
+		})
+		.returning();
+	await notify(db, {
+		businessId: job.businessId,
+		staffIds: mentions.filter((id) => id !== AI_MENTION && id !== member.id),
+		title: `${member.name} mentioned you in ${job.number}`,
+		body: body.length > 200 ? `${body.slice(0, 197)}…` : body,
+		link: teamLink(job),
+	});
+	if (!mentions.includes(AI_MENTION)) return { message, reply: null };
+	const reply = await assistantReply({
+		job,
+		asker: member,
+		members,
+		history,
+		question: withoutAiTag(body) || body,
+	});
+	return { message, reply };
+}
+
+/** The AI answers a teammate who tagged it, from the job's context and the group so far. */
+async function assistantReply(input: {
+	job: Job;
+	asker: StaffMember;
+	members: Awaited<ReturnType<typeof loadMembers>>;
+	history: (typeof schema.jobChat.$inferSelect)[];
 	question: string;
 }) {
 	const db = getDb();
-	const { job, context, refOf } = await jobContext(input.jobId);
-	const member = await loadStaff(input.staffId, job.businessId);
-	const [tasks, relays, history] = await Promise.all([
+	const { job, context, refOf } = await jobContext(input.job.id);
+	const [tasks, relays] = await Promise.all([
 		db
 			.select()
 			.from(schema.jobTasks)
@@ -777,19 +1005,9 @@ export async function askJobAssistant(input: {
 			.from(schema.relays)
 			.where(eq(schema.relays.jobId, job.id))
 			.orderBy(asc(schema.relays.createdAt)),
-		db
-			.select()
-			.from(schema.jobChat)
-			.where(eq(schema.jobChat.jobId, job.id))
-			.orderBy(asc(schema.jobChat.createdAt)),
 	]);
-	await db.insert(schema.jobChat).values({
-		jobId: job.id,
-		role: "pic",
-		authorName: member.name,
-		body: input.question,
-	});
-
+	const label = (name: string | null, id: string | null) =>
+		`${name ?? "Staff"}${id && id === job.picId ? " (PIC)" : ""}`;
 	const reply = await answerJobQuestion({
 		context,
 		handover: handoverText(job.handover),
@@ -799,12 +1017,19 @@ export async function askJobAssistant(input: {
 			answer: r.answer,
 			status: r.status,
 		})),
-		history: history.map((h) => ({
-			role: h.role === "pic" ? "pic" : "assistant",
+		history: input.history.map((h) => ({
+			who:
+				h.role === "assistant"
+					? "AI"
+					: h.role === "system"
+						? "SYSTEM"
+						: label(h.authorName, h.authorId),
 			body: h.body,
 		})),
 		question: input.question,
-		picName: member.name,
+		askerName: label(input.asker.name, input.asker.id),
+		picName: input.members.find((m) => m.id === job.picId)?.name ?? null,
+		team: input.members.map((m) => label(m.name, m.id)),
 	}).catch((err) => {
 		console.error("[job assistant]", err);
 		return {
@@ -840,6 +1065,7 @@ export async function askJobAssistant(input: {
 			jobId: job.id,
 			role: "assistant",
 			body: reply.answer,
+			mentions: [input.asker.id],
 			sources,
 			actions,
 		})
@@ -862,6 +1088,13 @@ export async function requestCustomerAnswer(input: {
 	const member = await loadStaff(input.staffId, job.businessId);
 	const question = input.question.trim();
 	if (!question) throw new Error("Type the question");
+	if (
+		!member.canApprove &&
+		!(await loadMembers(db, job.id)).some((m) => m.id === member.id)
+	)
+		throw new Error(
+			"Only people in this job's group can ask the customer a question",
+		);
 	const draft = await draftCustomerQuestion({
 		businessName: business.name,
 		customerName: conversation.customerName,
@@ -893,6 +1126,11 @@ export async function requestCustomerAnswer(input: {
 		summary: `${member.name} (${job.number}) wants to ask the customer: ${question}`,
 		payload: { relayId: relay.id },
 	});
+	await postSystem(
+		db,
+		job.id,
+		`${member.name} asked sales to check with the customer: "${question}"`,
+	);
 	const approvers = await db
 		.select({ id: schema.staff.id })
 		.from(schema.staff)
@@ -920,75 +1158,89 @@ export async function reviewRelay(input: {
 	draft?: string;
 	reason?: string;
 }) {
-	const db = getDb();
-	const relay = await db.query.relays.findFirst({
-		where: eq(schema.relays.id, input.relayId),
-	});
-	if (!relay) throw new Error("Question not found");
-	if (relay.status !== "pending") throw new Error("Already handled");
-	const member = await loadStaff(input.staffId, relay.businessId);
-	if (!member.canApprove)
-		throw new Error(`${member.name} can't approve messages to customers`);
-	const job = await db.query.jobs.findFirst({
-		where: eq(schema.jobs.id, relay.jobId),
-	});
+	// Locked, so two approvers can't both send the same question.
+	return getDb().transaction(async (db) => {
+		const [relay] = await db
+			.select()
+			.from(schema.relays)
+			.where(eq(schema.relays.id, input.relayId))
+			.for("update");
+		if (!relay) throw new Error("Question not found");
+		if (relay.status !== "pending") throw new Error("Already handled");
+		const member = await loadStaff(input.staffId, relay.businessId);
+		if (!member.canApprove)
+			throw new Error(`${member.name} can't approve messages to customers`);
+		const job = await db.query.jobs.findFirst({
+			where: eq(schema.jobs.id, relay.jobId),
+		});
 
-	if (input.action === "reject") {
+		if (input.action === "reject") {
+			const [row] = await db
+				.update(schema.relays)
+				.set({
+					status: "rejected",
+					reviewedById: member.id,
+					rejectReason: input.reason?.trim() || null,
+				})
+				.where(eq(schema.relays.id, relay.id))
+				.returning();
+			await emitOrbyteEvent(db, {
+				businessId: relay.businessId,
+				requestId: job?.requestId,
+				type: "relay.rejected",
+				actor: member.name,
+				summary: `${member.name} didn't send: ${relay.question}`,
+			});
+			await postSystem(
+				db,
+				relay.jobId,
+				`${member.name} (sales) didn't send "${relay.question}"${input.reason?.trim() ? `: ${input.reason.trim()}` : ""}`,
+			);
+			await notify(db, {
+				businessId: relay.businessId,
+				staffIds: [relay.askedById],
+				title: `Question not sent (${job?.number ?? "job"})`,
+				body: `${member.name}: ${input.reason?.trim() || "not sent to the customer"}. "${relay.question}"`,
+				link: job ? jobLink(job.businessId, job.id) : undefined,
+			});
+			return row;
+		}
+
+		const draft = (input.draft ?? relay.draft).trim();
+		if (!draft) throw new Error("The message is empty");
+		const [message] = await db
+			.insert(schema.messages)
+			.values({
+				conversationId: relay.conversationId,
+				sender: "staff",
+				authorName: member.name,
+				body: draft,
+			})
+			.returning();
 		const [row] = await db
 			.update(schema.relays)
 			.set({
-				status: "rejected",
+				status: "sent",
+				draft,
 				reviewedById: member.id,
-				rejectReason: input.reason?.trim() || null,
+				sentAt: message.createdAt,
 			})
 			.where(eq(schema.relays.id, relay.id))
 			.returning();
 		await emitOrbyteEvent(db, {
 			businessId: relay.businessId,
 			requestId: job?.requestId,
-			type: "relay.rejected",
+			type: "relay.sent",
 			actor: member.name,
-			summary: `${member.name} didn't send: ${relay.question}`,
+			summary: `${member.name} sent the customer a question for ${job?.number ?? "a job"}`,
 		});
-		await notify(db, {
-			businessId: relay.businessId,
-			staffIds: [relay.askedById],
-			title: `Question not sent (${job?.number ?? "job"})`,
-			body: `${member.name}: ${input.reason?.trim() || "not sent to the customer"}. "${relay.question}"`,
-			link: job ? jobLink(job.businessId, job.id) : undefined,
-		});
+		await postSystem(
+			db,
+			relay.jobId,
+			`${member.name} (sales) sent the customer: "${draft}"`,
+		);
 		return row;
-	}
-
-	const draft = (input.draft ?? relay.draft).trim();
-	if (!draft) throw new Error("The message is empty");
-	const [message] = await db
-		.insert(schema.messages)
-		.values({
-			conversationId: relay.conversationId,
-			sender: "staff",
-			authorName: member.name,
-			body: draft,
-		})
-		.returning();
-	const [row] = await db
-		.update(schema.relays)
-		.set({
-			status: "sent",
-			draft,
-			reviewedById: member.id,
-			sentAt: message.createdAt,
-		})
-		.where(eq(schema.relays.id, relay.id))
-		.returning();
-	await emitOrbyteEvent(db, {
-		businessId: relay.businessId,
-		requestId: job?.requestId,
-		type: "relay.sent",
-		actor: member.name,
-		summary: `${member.name} sent the customer a question for ${job?.number ?? "a job"}`,
 	});
-	return row;
 }
 
 /**
@@ -1030,10 +1282,16 @@ export async function matchRelayAnswer(input: {
 		where: eq(schema.jobs.id, open.jobId),
 	});
 	if (job) {
+		const asker = open.askedById
+			? await db.query.staff.findFirst({
+					where: eq(schema.staff.id, open.askedById),
+				})
+			: undefined;
 		await db.insert(schema.jobChat).values({
 			jobId: job.id,
 			role: "assistant",
-			body: `The customer answered your question "${open.question}": ${result.answer}`,
+			mentions: asker ? [asker.id] : [],
+			body: `The customer answered ${asker ? `${asker.name}'s` : "the team's"} question "${open.question}": ${result.answer}`,
 			sources: [
 				{ kind: "chat", label: "Customer's reply", ref: input.message.id },
 			],
@@ -1045,12 +1303,14 @@ export async function matchRelayAnswer(input: {
 			actor: "customer",
 			summary: `Customer answered for ${job.number}: ${result.answer}`,
 		});
+		// The whole team sees the answer in the group, so tell all of them.
+		const members = await loadMembers(db, job.id);
 		await notify(db, {
 			businessId: job.businessId,
-			staffIds: [open.askedById, job.picId],
+			staffIds: [open.askedById, job.picId, ...members.map((m) => m.id)],
 			title: `Customer answered (${job.number})`,
 			body: `${open.question} → ${result.answer}`,
-			link: jobLink(job.businessId, job.id),
+			link: teamLink(job),
 		});
 	}
 	return { relay: row, job };

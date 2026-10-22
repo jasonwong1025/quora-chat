@@ -40,6 +40,8 @@ export type OrbyteEventType =
 	| "job.task_added"
 	| "job.agreement_changed"
 	| "job.agreement_reviewed"
+	| "job.member_added"
+	| "job.member_removed"
 	| "relay.requested"
 	| "relay.sent"
 	| "relay.rejected"

@@ -9,7 +9,14 @@ import { quoteReviewToken } from "../../src/lib/agreements";
 import { emptyBrief } from "../../src/lib/intake";
 import type { Reading } from "../../src/server/ai";
 import { followUpAction, markLost } from "../../src/server/followups";
-import { updateJob, updateTask } from "../../src/server/jobs";
+import {
+	addJobMember,
+	postJobMessage,
+	removeJobMember,
+	requestCustomerAnswer,
+	updateJob,
+	updateTask,
+} from "../../src/server/jobs";
 import { createRequest, saveRequest } from "../../src/server/requirements";
 import { claimTask, finishTask } from "../../src/server/tasks";
 import { runNextTask } from "../../src/server/worker";
@@ -33,6 +40,7 @@ let reading: Reading | null = null;
 let beforeReminder: (() => Promise<void>) | null = null;
 let brokenHandover = false;
 let lastHandoverPrompt = "";
+let assistantPrompts: string[] = [];
 let relayResult = {
 	answers: false,
 	answer: null as string | null,
@@ -84,6 +92,15 @@ const server = createServer(async (req, res) => {
 	if (name === "follow_up_timing")
 		content = JSON.stringify({ waitHours: 48, reason: "Test schedule" });
 	if (name === "relay_answer") content = JSON.stringify(relayResult);
+	if (name === "job_assistant") {
+		assistantPrompts.push(JSON.stringify(input.messages));
+		content = JSON.stringify({
+			answer: "The customer wants it for 50 users.",
+			known: true,
+			sources: [{ kind: "brief", label: "Users", ref: null }],
+			actions: [],
+		});
+	}
 	res.setHeader("Content-Type", "application/json");
 	res.end(
 		JSON.stringify({
@@ -115,6 +132,7 @@ afterEach(async () => {
 	beforeReminder = null;
 	brokenHandover = false;
 	lastHandoverPrompt = "";
+	assistantPrompts = [];
 	relayResult = { answers: false, answer: null, changesScope: false };
 	await getDb().delete(schema.workflowTasks);
 	await getDb().delete(schema.businesses);
@@ -1054,4 +1072,115 @@ test("rejecting a revision of an unsigned quote keeps it signable and numbers th
 	await reject(r3);
 
 	assert.equal((await signQuote(signature(original.id))).status, "accepted");
+});
+
+test("the job team chat: members only, @Name notifies, and the AI answers only when tagged", async () => {
+	const s = await scenario();
+	const db = getDb();
+	const quote = await approve(s);
+	await signQuote(signature(quote.id));
+	await runNextTask();
+	await runNextTask();
+	const [job] = await db.select().from(schema.jobs);
+	assert.equal(job.picId, s.staff.id);
+	const members = async () =>
+		(
+			await db
+				.select()
+				.from(schema.jobMembers)
+				.where(eq(schema.jobMembers.jobId, job.id))
+		).map((m) => m.staffId);
+	const chat = () =>
+		db
+			.select()
+			.from(schema.jobChat)
+			.where(eq(schema.jobChat.jobId, job.id))
+			.orderBy(schema.jobChat.createdAt);
+	const notificationsFor = (staffId: string) =>
+		db
+			.select()
+			.from(schema.notifications)
+			.where(eq(schema.notifications.staffId, staffId));
+
+	// The PIC joins on creation, and the AI opens the group with the handover.
+	assert.deepEqual(await members(), [s.staff.id]);
+	const [intro] = await chat();
+	assert.equal(intro.role, "assistant");
+	assert.match(intro.body, /Build the agreed system/);
+
+	// Outsiders can't post, ask the customer, or add themselves.
+	const message = { jobId: job.id, staffId: s.other.id, body: "@AI hi" };
+	await assert.rejects(postJobMessage(message), /Only people in this job/);
+	await assert.rejects(
+		requestCustomerAnswer({
+			jobId: job.id,
+			staffId: s.other.id,
+			question: "Which login method?",
+		}),
+		/Only people in this job/,
+	);
+	await assert.rejects(
+		addJobMember({ jobId: job.id, staffId: s.other.id, memberId: s.other.id }),
+		/Only the PIC or an approver/,
+	);
+
+	await addJobMember({
+		jobId: job.id,
+		staffId: s.staff.id,
+		memberId: s.other.id,
+	});
+	assert.deepEqual(await members(), [s.staff.id, s.other.id]);
+	assert.equal((await notificationsFor(s.other.id)).length, 1);
+
+	// Talking to a teammate: notified, and the AI stays quiet.
+	const quiet = await postJobMessage({
+		jobId: job.id,
+		staffId: s.staff.id,
+		body: "@Team member can you start on the login page?",
+	});
+	assert.equal(quiet.reply, null);
+	assert.deepEqual(quiet.message.mentions, [s.other.id]);
+	assert.equal(assistantPrompts.length, 0);
+	assert.equal((await notificationsFor(s.other.id)).length, 2);
+
+	// Tagging @AI gets an answer from the job's context, addressed to the asker.
+	const asked = await postJobMessage({
+		jobId: job.id,
+		staffId: s.other.id,
+		body: "@AI how many users is this for?",
+	});
+	assert.ok(asked.reply);
+	assert.equal(asked.reply.role, "assistant");
+	assert.deepEqual(asked.reply.mentions, [s.other.id]);
+	assert.equal(assistantPrompts.length, 1);
+	assert.match(assistantPrompts[0], /Team member just tagged you/);
+	assert.match(assistantPrompts[0], /can you start on the login page/);
+	assert.match(assistantPrompts[0], /asks you: how many users is this for\?/);
+
+	// The PIC stays in the group; others can leave.
+	await assert.rejects(
+		removeJobMember({
+			jobId: job.id,
+			staffId: s.staff.id,
+			memberId: s.staff.id,
+		}),
+		/Assign another person in charge/,
+	);
+	await removeJobMember({
+		jobId: job.id,
+		staffId: s.other.id,
+		memberId: s.other.id,
+	});
+	assert.deepEqual(await members(), [s.staff.id]);
+	const log = (await chat())
+		.filter((m) => m.role === "system")
+		.map((m) => m.body);
+	assert.deepEqual(log, [
+		"Sales owner added Team member",
+		"Team member left the group",
+	]);
+
+	// A new PIC joins the group automatically.
+	await updateJob({ jobId: job.id, staffId: s.staff.id, picId: s.other.id });
+	assert.deepEqual(await members(), [s.staff.id, s.other.id]);
 });

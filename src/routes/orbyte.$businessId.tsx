@@ -98,7 +98,7 @@ function Shell() {
 	const myOpenJobs =
 		jobs.data?.filter(
 			(j) =>
-				j.picId === me?.id &&
+				(j.picId === me?.id || (me && j.memberIds.includes(me.id))) &&
 				["preparing", "upcoming", "active"].includes(j.status),
 		).length ?? 0;
 	const awaiting =

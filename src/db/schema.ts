@@ -637,14 +637,44 @@ export type BotAction =
 	| { kind: "flag_blocker"; taskId: string | null; note: string }
 	| { kind: "ask_customer"; question: string };
 
+/**
+ * The job's internal team group: the PIC, any other assigned workers, and the AI.
+ * The customer is never in it; only sales-approved messages reach them.
+ */
+export const jobMembers = pgTable(
+	"job_members",
+	{
+		id: id(),
+		jobId: text("job_id")
+			.notNull()
+			.references(() => jobs.id, { onDelete: "cascade" }),
+		staffId: text("staff_id")
+			.notNull()
+			.references(() => staff.id, { onDelete: "cascade" }),
+		addedById: text("added_by_id").references(() => staff.id, {
+			onDelete: "set null",
+		}),
+		createdAt: createdAt(),
+	},
+	(t) => [uniqueIndex("job_members_job_staff").on(t.jobId, t.staffId)],
+);
+
+/** Who a message tags: staff ids, or "ai" for the assistant. */
+export type Mention = string;
+
+/** The team group chat. The AI only replies when it is tagged. */
 export const jobChat = pgTable("job_chat", {
 	id: id(),
 	jobId: text("job_id")
 		.notNull()
 		.references(() => jobs.id, { onDelete: "cascade" }),
-	role: text("role").notNull(), // "pic" | "assistant"
+	role: text("role").notNull(), // "staff" | "assistant" | "system" (legacy: "pic")
+	authorId: text("author_id").references(() => staff.id, {
+		onDelete: "set null",
+	}),
 	authorName: text("author_name"),
 	body: text("body").notNull(),
+	mentions: jsonb("mentions").$type<Mention[]>().default([]).notNull(),
 	sources: jsonb("sources").$type<BotSource[]>().default([]).notNull(),
 	actions: jsonb("actions").$type<BotAction[]>().default([]).notNull(),
 	createdAt: createdAt(),

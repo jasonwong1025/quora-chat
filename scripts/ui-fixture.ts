@@ -169,6 +169,9 @@ try {
 			suggestedTasks: ["Review access requirements"],
 		},
 	});
+	await db
+		.insert(schema.jobMembers)
+		.values({ jobId: "preview-job", staffId: staff.id });
 	await db.insert(schema.jobTasks).values([
 		{ jobId: "preview-job", title: "Completed discovery", status: "done" },
 		{

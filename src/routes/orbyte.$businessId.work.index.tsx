@@ -34,7 +34,10 @@ function Work() {
 	const [picked, setScope] = useState<"mine" | "all" | null>(null);
 	const [showClosed, setShowClosed] = useState(false);
 	const all = jobs.data ?? [];
-	const mine = all.filter((j) => j.picId === me?.id);
+	// Mine: I'm the PIC or a member of the job's team group.
+	const mine = all.filter(
+		(j) => j.picId === me?.id || (me && j.memberIds.includes(me.id)),
+	);
 	// Start on "My jobs" only if there are any.
 	const scope = picked ?? (mine.length > 0 ? "mine" : "all");
 	const list = scope === "mine" ? mine : all;
@@ -44,7 +47,7 @@ function Work() {
 		<div className="flex h-full flex-col p-4 sm:p-6">
 			<PageHeader
 				title="Work"
-				description="Jobs handed over from signed quotations. Each one carries the customer's full context, and an assistant that knows it."
+				description="Jobs handed over from signed quotations. Each one has the customer's full context and a team chat with an AI that knows it (tag @AI)."
 			/>
 			<div className="mb-4 flex flex-wrap items-center gap-3">
 				<div className="flex rounded-lg border bg-card p-0.5">

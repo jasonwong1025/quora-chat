@@ -30,6 +30,21 @@ with sync_playwright() as p:
     page.screenshot(path=str(artifacts / "revised-project.png"), full_page=True)
     page.get_by_role("button", name="I reviewed the scope and tasks").click()
     expect(page.get_by_role("button", name="I reviewed the scope and tasks")).to_have_count(0)
+    # Team chat: a plain message stays between teammates; @AI asks the assistant.
+    team = page.locator("aside")
+    box = team.get_by_label("Message the team")
+    box.fill("Please check the access list first")
+    box.press("Enter")
+    expect(team.get_by_text("Please check the access list first", exact=True)).to_be_visible()
+    box.press_sequentially("@A")
+    expect(team.get_by_role("option", name="AI assistant")).to_be_visible()
+    box.press("Enter")
+    expect(box).to_have_value("@AI ")
+    box.press_sequentially("how many staff?")
+    box.press("Enter")
+    # The isolated test has no model, so the assistant's fallback reply proves it was asked.
+    expect(team.get_by_text("Sorry, I couldn't look that up just now.", exact=False)).to_be_visible(timeout=20000)
+    page.screenshot(path=str(artifacts / "team-chat.png"), full_page=True)
     page.set_viewport_size({"width": 390, "height": 844})
     page.goto(base + "/orbyte/agreement-preview/quotes?r=preview-request")
     page.wait_for_load_state("networkidle")
@@ -65,4 +80,4 @@ with sync_playwright() as p:
     page.screenshot(path=str(artifacts / "signed-requirements.png"), full_page=True)
     assert not errors, errors
     browser.close()
-print("Browser checks passed: outdated approval, reasoned waiver, current draft, PIC review, mobile layout")
+print("Browser checks passed: outdated approval, reasoned waiver, current draft, PIC review, team chat, mobile layout")

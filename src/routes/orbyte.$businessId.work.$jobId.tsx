@@ -3,6 +3,7 @@ import { createFileRoute, Link } from "@tanstack/react-router";
 import {
 	AlertTriangle,
 	ArrowLeft,
+	AtSign,
 	Bot,
 	CheckCircle2,
 	Circle,
@@ -19,7 +20,9 @@ import {
 	SendHorizontal,
 	Sparkles,
 	Trash2,
+	UserPlus,
 	UserRound,
+	Users,
 } from "lucide-react";
 import { Fragment, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
@@ -49,20 +52,27 @@ import {
 import { Textarea } from "#/components/ui/textarea";
 import type { BotAction, BotSource } from "#/db/schema";
 import { answerText, assess } from "#/lib/intake";
+import {
+	AI_HANDLE,
+	AI_MENTION,
+	escapeRegExp,
+	handlesFor,
+	mentionsAi,
+} from "#/lib/mentions";
 import { formatMYR } from "#/lib/money";
-import { clock, dayLabel } from "#/lib/time";
+import { clock, dayLabel, initials } from "#/lib/time";
 import type { JobDetail } from "#/lib/types";
 import { cn } from "#/lib/utils";
 import { orpc } from "#/orpc/client";
 
 export const Route = createFileRoute("/orbyte/$businessId/work/$jobId")({
 	validateSearch: z.object({
-		tab: z.enum(["handover", "tasks", "chat", "quote", "assistant"]).optional(),
+		tab: z.enum(["handover", "tasks", "chat", "quote", "team"]).optional(),
 	}),
 	component: JobPage,
 });
 
-type Tab = "handover" | "tasks" | "chat" | "quote" | "assistant";
+type Tab = "handover" | "tasks" | "chat" | "quote" | "team";
 
 function useRefresh() {
 	const queryClient = useQueryClient();
@@ -112,7 +122,7 @@ function JobPage() {
 							],
 							["chat", "Customer chat"],
 							["quote", "Quote & files"],
-							["assistant", "Assistant"],
+							["team", "Team chat"],
 						] as const
 					).map(([k, label]) => (
 						<button
@@ -122,7 +132,7 @@ function JobPage() {
 							className={cn(
 								"-mb-px border-b-2 border-transparent px-3 py-2.5 text-sm whitespace-nowrap text-muted-foreground",
 								tab === k && "border-primary font-medium text-foreground",
-								k === "assistant" && "xl:hidden",
+								k === "team" && "xl:hidden",
 							)}
 						>
 							{label}
@@ -142,9 +152,9 @@ function JobPage() {
 						/>
 					)}
 					{tab === "quote" && <QuoteTab job={j} businessName={business.name} />}
-					{tab === "assistant" && (
+					{tab === "team" && (
 						<div className="flex h-full min-h-[480px] rounded-xl border bg-card xl:hidden">
-							<Assistant
+							<TeamChat
 								job={j}
 								onShowMessage={showMessage}
 								onAskCustomer={setAsking}
@@ -154,7 +164,7 @@ function JobPage() {
 				</div>
 			</div>
 			<aside className="hidden w-[420px] shrink-0 border-l bg-card xl:flex">
-				<Assistant
+				<TeamChat
 					job={j}
 					onShowMessage={showMessage}
 					onAskCustomer={setAsking}
@@ -281,7 +291,15 @@ function JobHeader({ job, onAsk }: { job: JobDetail; onAsk: () => void }) {
 							</SelectContent>
 						</Select>
 					</Labeled>
-					<Button size="sm" variant="outline" onClick={onAsk}>
+					<Button
+						size="sm"
+						variant="outline"
+						onClick={onAsk}
+						disabled={
+							!me?.canApprove && !job.members.some((m) => m.id === me?.id)
+						}
+						title="Sales approve it before it reaches the customer"
+					>
 						<MessageCircleQuestion className="size-4" /> Ask the customer
 					</Button>
 				</div>
@@ -438,8 +456,8 @@ function HandoverTab({
 			<Card title="Questions we asked the customer for you">
 				{job.relays.length === 0 ? (
 					<p className="text-sm text-muted-foreground">
-						None yet. Use "Ask the customer" or ask the assistant. Sales approve
-						every message before it's sent.
+						None yet. Use "Ask the customer" or tag @AI in the team chat. Sales
+						approve every message before it's sent.
 					</p>
 				) : (
 					<ul className="divide-y text-sm">
@@ -878,7 +896,7 @@ function QuoteTab({
 	);
 }
 
-// --- The PIC's assistant ------------------------------------------------------------------
+// --- Team chat: the PIC, assigned workers and the AI (answers when tagged @AI) ---------------
 
 const starters = [
 	"What exactly does the customer want?",
@@ -886,7 +904,64 @@ const starters = [
 	"Anything unclear I should check first?",
 ];
 
-function Assistant({
+type Member = JobDetail["members"][number];
+type Handle = { id: string; handle: string; label: string };
+
+/** Splits a message so tags (@AI, @Ravi Chandran) can be shown highlighted. */
+function MessageText({ body, handles }: { body: string; handles: Handle[] }) {
+	const known = [...new Set(handles.map((h) => h.handle))].sort(
+		(a, b) => b.length - a.length,
+	);
+	if (!known.length) return <>{body}</>;
+	const re = new RegExp(
+		`(@(?:${known.map(escapeRegExp).join("|")}))(?![\\p{L}\\p{N}_])`,
+		"giu",
+	);
+	return (
+		<>
+			{body.split(re).map((part, i) =>
+				i % 2 === 1 ? (
+					// biome-ignore lint/suspicious/noArrayIndexKey: parts of one static string
+					<span key={i} className="font-semibold text-[var(--orb-royal)]">
+						{part}
+					</span>
+				) : (
+					part
+				),
+			)}
+		</>
+	);
+}
+
+function Avatar({
+	name,
+	ai,
+	title,
+}: {
+	name: string;
+	ai?: boolean;
+	title?: string;
+}) {
+	return (
+		<span
+			title={title ?? name}
+			className={cn(
+				"flex size-7 shrink-0 items-center justify-center rounded-full text-[10px] font-semibold text-white",
+				ai ? "bg-[var(--orb-royal)]" : "bg-[var(--orb-navy)]",
+			)}
+		>
+			{ai ? <Bot className="size-4" /> : initials(name)}
+		</span>
+	);
+}
+
+/** The "@..." being typed just before the cursor, if any. */
+function tagAtCursor(text: string, cursor: number) {
+	const m = /(^|\s)@([^\s@]*)$/u.exec(text.slice(0, cursor));
+	return m ? { start: cursor - m[2].length - 1, query: m[2] } : null;
+}
+
+function TeamChat({
 	job,
 	onShowMessage,
 	onAskCustomer,
@@ -897,8 +972,8 @@ function Assistant({
 }) {
 	const { me } = useWorkspace();
 	const refresh = useRefresh();
-	const ask = useMutation(
-		orpc.jobs.ask.mutationOptions({ onSuccess: refresh }),
+	const post = useMutation(
+		orpc.jobs.chat.post.mutationOptions({ onSuccess: refresh }),
 	);
 	const addTask = useMutation(
 		orpc.jobs.tasks.add.mutationOptions({ onSuccess: refresh }),
@@ -907,24 +982,74 @@ function Assistant({
 		orpc.jobs.tasks.update.mutationOptions({ onSuccess: refresh }),
 	);
 	const [draft, setDraft] = useState("");
+	const [cursor, setCursor] = useState(0);
+	const [picked, setPicked] = useState(0);
+	// Escape hides the picker until the message changes.
+	const [dismissed, setDismissed] = useState<string | null>(null);
 	const [pending, setPending] = useState<string | null>(null);
 	const [applied, setApplied] = useState<Set<string>>(new Set());
+	const [managing, setManaging] = useState(false);
 	const bottom = useRef<HTMLDivElement>(null);
+	const input = useRef<HTMLTextAreaElement>(null);
+
+	const isMember = Boolean(me && job.members.some((m) => m.id === me.id));
+	const canManage = Boolean(me && (me.canApprove || me.id === job.picId));
+	const handles: Handle[] = [
+		{ id: AI_MENTION, handle: AI_HANDLE, label: "AI assistant" },
+		...handlesFor(job.members).map((h) => ({
+			...h,
+			label: job.members.find((m) => m.id === h.id)?.name ?? h.handle,
+		})),
+	];
+	// The picker offers each person once, by their full name (AI first).
+	const tag = dismissed === draft ? null : tagAtCursor(draft, cursor);
+	const suggestions = tag
+		? [
+				handles[0],
+				...job.members
+					.filter((m) => m.id !== me?.id)
+					.map((m) => ({ id: m.id, handle: m.name, label: m.name })),
+			].filter((h) =>
+				h.handle
+					.toLowerCase()
+					.split(/\s+/)
+					.some((w) => w.startsWith(tag.query.toLowerCase())),
+			)
+		: [];
+	const onlyIntro = job.chat.every(
+		(m) => m.role !== "staff" && m.role !== "pic",
+	);
 
 	// biome-ignore lint/correctness/useExhaustiveDependencies: scroll when new messages arrive
 	useEffect(() => {
 		bottom.current?.scrollIntoView({ block: "end" });
 	}, [job.chat.length, pending]);
 
-	async function send(question: string) {
+	function insertTag(h: { handle: string }) {
+		const at = tag?.start ?? cursor;
+		const end = tag ? at + 1 + tag.query.length : cursor;
+		const next = `${draft.slice(0, at)}@${h.handle} ${draft.slice(end)}`;
+		const pos = at + h.handle.length + 2;
+		setDraft(next);
+		setCursor(pos);
+		setPicked(0);
+		requestAnimationFrame(() => {
+			input.current?.focus();
+			input.current?.setSelectionRange(pos, pos);
+		});
+	}
+
+	async function send(body: string) {
 		if (!me) return toast.error("Choose who you are signed in as first");
-		if (!question.trim()) return;
-		setPending(question);
+		if (!body.trim()) return;
+		setPending(body);
 		setDraft("");
+		setCursor(0);
 		try {
-			await ask.mutateAsync({ jobId: job.id, staffId: me.id, question });
+			await post.mutateAsync({ jobId: job.id, staffId: me.id, body });
 		} catch (err) {
-			toast.error(err instanceof Error ? err.message : "The assistant failed");
+			setDraft(body);
+			toast.error(err instanceof Error ? err.message : "Message not sent");
 		} finally {
 			setPending(null);
 		}
@@ -971,140 +1096,426 @@ function Assistant({
 
 	return (
 		<div className="flex min-h-0 w-full flex-col">
-			<div className="border-b px-4 py-3">
-				<p className="flex items-center gap-2 font-semibold">
-					<span className="flex size-7 items-center justify-center rounded-full bg-[var(--orb-royal)] text-white">
-						<Bot className="size-4" />
+			<div className="space-y-2 border-b px-4 py-3">
+				<div className="flex items-center justify-between gap-2">
+					<p className="flex items-center gap-2 font-semibold">
+						<span className="flex size-7 items-center justify-center rounded-full bg-[var(--orb-royal)] text-white">
+							<Users className="size-4" />
+						</span>
+						Team chat
+					</p>
+					<Button size="sm" variant="ghost" onClick={() => setManaging(true)}>
+						<UserPlus className="size-4" /> People
+					</Button>
+				</div>
+				<p className="text-xs text-muted-foreground">
+					Internal: the customer can't see this. Tag{" "}
+					<span className="font-semibold text-[var(--orb-royal)]">@AI</span> to
+					ask the assistant. It knows the signed quotation, requirements and the
+					whole customer chat.
+				</p>
+				<div className="flex flex-wrap items-center gap-1">
+					<span title="AI assistant">
+						<Avatar name="AI" ai />
 					</span>
-					Job assistant
-				</p>
-				<p className="mt-1 text-xs text-muted-foreground">
-					Uses the signed quotation, captured requirements, agreement
-					conversation and file references. If the customer never said, it can
-					ask them for you through sales.
-				</p>
+					{job.members.map((m) => (
+						<span key={m.id} className="relative">
+							<Avatar
+								name={m.name}
+								title={`${m.name}${m.id === job.picId ? " (PIC)" : ""}`}
+							/>
+							{m.id === job.picId && (
+								<span className="absolute -right-1 -bottom-1 rounded bg-status-review px-0.5 text-[8px] font-bold text-white">
+									PIC
+								</span>
+							)}
+						</span>
+					))}
+				</div>
 			</div>
 			<div className="min-h-0 flex-1 space-y-3 overflow-y-auto p-4">
-				{job.chat.length === 0 && !pending && (
+				{job.chat.map((m) => {
+					if (m.role === "system")
+						return (
+							<p
+								key={m.id}
+								className="mx-auto max-w-[90%] text-center text-[11px] text-muted-foreground"
+							>
+								{m.body} · {clock(m.createdAt)}
+							</p>
+						);
+					if (m.role === "assistant")
+						return (
+							<div key={m.id} className="flex gap-2">
+								<Avatar name="AI" ai />
+								<div className="mr-4 min-w-0 space-y-1.5">
+									<p className="text-[11px] font-semibold text-muted-foreground">
+										AI assistant · {clock(m.createdAt)}
+									</p>
+									<div className="rounded-2xl rounded-tl-sm bg-muted px-3 py-2 text-sm whitespace-pre-wrap">
+										<MessageText body={m.body} handles={handles} />
+									</div>
+									{m.sources.length > 0 && (
+										<Sources
+											sources={m.sources}
+											onShowMessage={onShowMessage}
+										/>
+									)}
+									{m.actions.length > 0 && (
+										<div className="flex flex-wrap gap-1.5">
+											{m.actions.map((a, i) => {
+												const key = `${m.id}:${i}`;
+												const done = applied.has(key);
+												return (
+													<button
+														key={key}
+														type="button"
+														disabled={done || !isMember}
+														onClick={() => apply(key, a)}
+														className={cn(
+															"inline-flex max-w-full items-center gap-1.5 rounded-full border px-2.5 py-1 text-left text-xs hover:bg-muted disabled:opacity-60",
+															a.kind === "ask_customer" &&
+																"border-[var(--orb-royal)]/40 text-[var(--orb-royal)]",
+														)}
+													>
+														{a.kind === "add_task" ? (
+															<ListPlus className="size-3.5 shrink-0" />
+														) : a.kind === "flag_blocker" ? (
+															<Flag className="size-3.5 shrink-0" />
+														) : (
+															<MessageCircleQuestion className="size-3.5 shrink-0" />
+														)}
+														<span className="line-clamp-2">
+															{done
+																? "Done"
+																: a.kind === "add_task"
+																	? `Add task: ${a.title}`
+																	: a.kind === "flag_blocker"
+																		? `Flag blocker: ${a.note}`
+																		: `Ask the customer: ${a.question}`}
+														</span>
+													</button>
+												);
+											})}
+										</div>
+									)}
+								</div>
+							</div>
+						);
+					// A teammate ("pic" rows come from the old one-to-one assistant).
+					const mine = me && m.authorId === me.id;
+					const name = m.authorName ?? "Staff";
+					return mine ? (
+						<div key={m.id} className="ml-8 space-y-0.5 text-right">
+							<p className="text-[11px] text-muted-foreground">
+								{clock(m.createdAt)}
+							</p>
+							<div className="inline-block rounded-2xl rounded-tr-sm bg-[var(--orb-navy)] px-3 py-2 text-left text-sm whitespace-pre-wrap text-white [&_span]:text-sky-200">
+								<MessageText body={m.body} handles={handles} />
+							</div>
+						</div>
+					) : (
+						<div key={m.id} className="flex gap-2">
+							<Avatar name={name} />
+							<div className="mr-8 min-w-0 space-y-0.5">
+								<p className="text-[11px] font-semibold text-muted-foreground">
+									{name}
+									{m.authorId && m.authorId === job.picId ? " · PIC" : ""} ·{" "}
+									{clock(m.createdAt)}
+								</p>
+								<div className="rounded-2xl rounded-tl-sm border bg-card px-3 py-2 text-sm whitespace-pre-wrap">
+									<MessageText body={m.body} handles={handles} />
+								</div>
+							</div>
+						</div>
+					);
+				})}
+				{onlyIntro && !pending && isMember && (
 					<div className="space-y-2">
 						<p className="text-xs text-muted-foreground">Try asking:</p>
 						{starters.map((s) => (
 							<button
 								key={s}
 								type="button"
-								disabled={job.status === "preparing"}
-								onClick={() => send(s)}
-								className="block w-full rounded-lg border px-3 py-2 text-left text-sm hover:bg-muted disabled:opacity-50"
+								onClick={() => send(`@${AI_HANDLE} ${s}`)}
+								className="block w-full rounded-lg border px-3 py-2 text-left text-sm hover:bg-muted"
 							>
+								<span className="font-semibold text-[var(--orb-royal)]">
+									@{AI_HANDLE}
+								</span>{" "}
 								{s}
 							</button>
 						))}
 					</div>
 				)}
-				{job.chat.map((m) =>
-					m.role === "pic" ? (
-						<div
-							key={m.id}
-							className="ml-8 rounded-2xl rounded-tr-sm bg-[var(--orb-navy)] px-3 py-2 text-sm text-white"
-						>
-							{m.body}
-						</div>
-					) : (
-						<div key={m.id} className="mr-4 space-y-1.5">
-							<div className="rounded-2xl rounded-tl-sm bg-muted px-3 py-2 text-sm whitespace-pre-wrap">
-								{m.body}
-							</div>
-							{m.sources.length > 0 && (
-								<Sources sources={m.sources} onShowMessage={onShowMessage} />
-							)}
-							{m.actions.length > 0 && (
-								<div className="flex flex-wrap gap-1.5">
-									{m.actions.map((a, i) => {
-										const key = `${m.id}:${i}`;
-										const done = applied.has(key);
-										return (
-											<button
-												key={key}
-												type="button"
-												disabled={done}
-												onClick={() => apply(key, a)}
-												className={cn(
-													"inline-flex max-w-full items-center gap-1.5 rounded-full border px-2.5 py-1 text-left text-xs hover:bg-muted disabled:opacity-60",
-													a.kind === "ask_customer" &&
-														"border-[var(--orb-royal)]/40 text-[var(--orb-royal)]",
-												)}
-											>
-												{a.kind === "add_task" ? (
-													<ListPlus className="size-3.5 shrink-0" />
-												) : a.kind === "flag_blocker" ? (
-													<Flag className="size-3.5 shrink-0" />
-												) : (
-													<MessageCircleQuestion className="size-3.5 shrink-0" />
-												)}
-												<span className="line-clamp-2">
-													{done
-														? "Done"
-														: a.kind === "add_task"
-															? `Add task: ${a.title}`
-															: a.kind === "flag_blocker"
-																? `Flag blocker: ${a.note}`
-																: `Ask the customer: ${a.question}`}
-												</span>
-											</button>
-										);
-									})}
-								</div>
-							)}
-						</div>
-					),
-				)}
 				{pending && (
 					<>
-						<div className="ml-8 rounded-2xl rounded-tr-sm bg-[var(--orb-navy)] px-3 py-2 text-sm text-white">
-							{pending}
+						<div className="ml-8 text-right">
+							<div className="inline-block rounded-2xl rounded-tr-sm bg-[var(--orb-navy)] px-3 py-2 text-left text-sm whitespace-pre-wrap text-white opacity-70">
+								{pending}
+							</div>
 						</div>
-						<p className="flex items-center gap-2 text-xs text-muted-foreground">
-							<Loader2 className="size-3.5 animate-spin" /> Looking through the
-							chat and brief…
-						</p>
+						{mentionsAi(pending) && (
+							<p className="flex items-center gap-2 text-xs text-muted-foreground">
+								<Loader2 className="size-3.5 animate-spin" /> AI is looking
+								through the chat and brief…
+							</p>
+						)}
 					</>
 				)}
 				<div ref={bottom} />
 			</div>
-			<form
-				className="flex items-end gap-2 border-t p-3"
-				onSubmit={(e) => {
-					e.preventDefault();
-					send(draft);
-				}}
-			>
-				<Textarea
-					value={draft}
-					onChange={(e) => setDraft(e.target.value)}
-					onKeyDown={(e) => {
-						if (e.key === "Enter" && !e.shiftKey) {
-							e.preventDefault();
-							e.currentTarget.form?.requestSubmit();
-						}
+			{isMember ? (
+				<form
+					className="relative border-t p-3"
+					onSubmit={(e) => {
+						e.preventDefault();
+						send(draft);
 					}}
-					rows={1}
-					disabled={job.status === "preparing"}
-					placeholder={
-						job.status === "preparing"
-							? "Available once the handover is ready…"
-							: "Ask about this job…"
-					}
-					className="max-h-32 min-h-10 resize-none"
-				/>
-				<Button
-					type="submit"
-					size="icon"
-					disabled={!draft.trim() || pending !== null}
 				>
-					<SendHorizontal className="size-4" />
-				</Button>
-			</form>
+					{suggestions.length > 0 && (
+						<div
+							role="listbox"
+							aria-label="Tag someone"
+							className="absolute inset-x-3 bottom-full mb-1 overflow-hidden rounded-lg border bg-popover shadow-md"
+						>
+							{suggestions.map((s, i) => (
+								<button
+									key={s.id}
+									type="button"
+									role="option"
+									aria-selected={i === picked}
+									onMouseDown={(e) => {
+										e.preventDefault();
+										insertTag(s);
+									}}
+									className={cn(
+										"flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm hover:bg-muted",
+										i === picked && "bg-muted",
+									)}
+								>
+									<Avatar name={s.label} ai={s.id === AI_MENTION} />
+									<span>{s.label}</span>
+									{s.id === job.picId && (
+										<span className="text-xs text-muted-foreground">PIC</span>
+									)}
+								</button>
+							))}
+						</div>
+					)}
+					<div className="flex items-end gap-2">
+						<Button
+							type="button"
+							size="icon"
+							variant="ghost"
+							title="Ask the AI"
+							onClick={() => insertTag(handles[0])}
+						>
+							<AtSign className="size-4" />
+						</Button>
+						<Textarea
+							ref={input}
+							value={draft}
+							aria-label="Message the team"
+							onChange={(e) => {
+								setDraft(e.target.value);
+								setCursor(e.target.selectionStart);
+								setPicked(0);
+							}}
+							onSelect={(e) => setCursor(e.currentTarget.selectionStart)}
+							onKeyDown={(e) => {
+								if (suggestions.length) {
+									if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+										e.preventDefault();
+										const step = e.key === "ArrowDown" ? 1 : -1;
+										setPicked(
+											(p) =>
+												(p + step + suggestions.length) % suggestions.length,
+										);
+										return;
+									}
+									if (e.key === "Enter" || e.key === "Tab") {
+										e.preventDefault();
+										insertTag(suggestions[picked] ?? suggestions[0]);
+										return;
+									}
+									if (e.key === "Escape") {
+										setDismissed(draft);
+										return;
+									}
+								}
+								if (e.key === "Enter" && !e.shiftKey) {
+									e.preventDefault();
+									e.currentTarget.form?.requestSubmit();
+								}
+							}}
+							rows={1}
+							placeholder="Message the team… type @ to tag someone or @AI"
+							className="max-h-32 min-h-10 resize-none"
+						/>
+						<Button
+							type="submit"
+							size="icon"
+							disabled={!draft.trim() || pending !== null}
+						>
+							<SendHorizontal className="size-4" />
+						</Button>
+					</div>
+				</form>
+			) : (
+				<div className="flex items-center justify-between gap-2 border-t p-3 text-xs text-muted-foreground">
+					<span>
+						You're not in this job's group.
+						{canManage ? "" : " Ask the PIC or an approver to add you."}
+					</span>
+					{canManage && (
+						<Button
+							size="sm"
+							variant="outline"
+							onClick={() => setManaging(true)}
+						>
+							Add people
+						</Button>
+					)}
+				</div>
+			)}
+			{managing && (
+				<MembersDialog
+					job={job}
+					canManage={canManage}
+					onClose={() => setManaging(false)}
+				/>
+			)}
 		</div>
+	);
+}
+
+function MembersDialog({
+	job,
+	canManage,
+	onClose,
+}: {
+	job: JobDetail;
+	canManage: boolean;
+	onClose: () => void;
+}) {
+	const { business, me } = useWorkspace();
+	const refresh = useRefresh();
+	const add = useMutation(
+		orpc.jobs.members.add.mutationOptions({ onSuccess: refresh }),
+	);
+	const remove = useMutation(
+		orpc.jobs.members.remove.mutationOptions({ onSuccess: refresh }),
+	);
+	const [adding, setAdding] = useState<string>("");
+	const others = business.staff.filter(
+		(s) => !job.members.some((m) => m.id === s.id),
+	);
+	const run = async (fn: () => Promise<unknown>, done: string) => {
+		try {
+			await fn();
+			toast.success(done);
+		} catch (err) {
+			toast.error(err instanceof Error ? err.message : "Failed");
+		}
+	};
+	const removable = (m: Member) =>
+		m.id !== job.picId && (canManage || m.id === me?.id);
+	return (
+		<Dialog open onOpenChange={(o) => !o && onClose()}>
+			<DialogContent className="orbyte max-w-md">
+				<DialogHeader>
+					<DialogTitle>People on {job.number}</DialogTitle>
+					<DialogDescription>
+						Everyone here can read and post in the team chat, tag @AI, and ask
+						the customer a question through sales. The customer is never in this
+						group.
+					</DialogDescription>
+				</DialogHeader>
+				<ul className="divide-y rounded-lg border">
+					<li className="flex items-center gap-2 px-3 py-2 text-sm">
+						<Avatar name="AI" ai />
+						<span className="flex-1">AI assistant</span>
+						<span className="text-xs text-muted-foreground">Tag @AI</span>
+					</li>
+					{job.members.map((m) => (
+						<li
+							key={m.id}
+							className="flex items-center gap-2 px-3 py-2 text-sm"
+						>
+							<Avatar name={m.name} />
+							<span className="min-w-0 flex-1">
+								<span className="block truncate">{m.name}</span>
+								<span className="block text-xs text-muted-foreground">
+									{m.id === job.picId ? "Person in charge" : m.role}
+								</span>
+							</span>
+							{removable(m) && me && (
+								<Button
+									size="sm"
+									variant="ghost"
+									disabled={remove.isPending}
+									onClick={() =>
+										run(
+											() =>
+												remove.mutateAsync({
+													jobId: job.id,
+													staffId: me.id,
+													memberId: m.id,
+												}),
+											m.id === me.id
+												? "You left the group"
+												: `Removed ${m.name}`,
+										)
+									}
+								>
+									{m.id === me.id ? "Leave" : "Remove"}
+								</Button>
+							)}
+						</li>
+					))}
+				</ul>
+				{canManage && me ? (
+					<div className="flex gap-2">
+						<Select value={adding} onValueChange={setAdding}>
+							<SelectTrigger className="flex-1" aria-label="Add a teammate">
+								<SelectValue
+									placeholder={
+										others.length ? "Add a teammate…" : "Everyone is in"
+									}
+								/>
+							</SelectTrigger>
+							<SelectContent position="popper">
+								{others.map((s) => (
+									<SelectItem key={s.id} value={s.id}>
+										{s.name} · {s.role}
+									</SelectItem>
+								))}
+							</SelectContent>
+						</Select>
+						<Button
+							disabled={!adding || add.isPending}
+							onClick={() =>
+								run(async () => {
+									await add.mutateAsync({
+										jobId: job.id,
+										staffId: me.id,
+										memberId: adding,
+									});
+									setAdding("");
+								}, "Added to the group")
+							}
+						>
+							Add
+						</Button>
+					</div>
+				) : (
+					<p className="text-xs text-muted-foreground">
+						Only the PIC or an approver can add or remove people.
+					</p>
+				)}
+			</DialogContent>
+		</Dialog>
 	);
 }
 

@@ -17,9 +17,12 @@ import { suggestSku, uniqueSku } from "#/lib/sku";
 import { suggestQuestions } from "#/server/ai";
 import { fastForward, followUpAction } from "#/server/followups";
 import {
+	addJobMember,
 	addTask,
-	askJobAssistant,
+	loadMembers,
+	postJobMessage,
 	prepareHandover,
+	removeJobMember,
 	requestCustomerAnswer,
 	reviewRelay,
 	updateJob,
@@ -1147,7 +1150,7 @@ const listJobs = os.input(businessInput).handler(async ({ input }) => {
 		.where(eq(schema.jobs.businessId, input.businessId))
 		.orderBy(desc(schema.jobs.createdAt));
 	const ids = rows.map((r) => r.job.id);
-	const [tasks, relays] = ids.length
+	const [tasks, relays, members] = ids.length
 		? await Promise.all([
 				db
 					.select({
@@ -1160,14 +1163,24 @@ const listJobs = os.input(businessInput).handler(async ({ input }) => {
 					.select({ jobId: schema.relays.jobId, status: schema.relays.status })
 					.from(schema.relays)
 					.where(inArray(schema.relays.jobId, ids)),
+				db
+					.select({
+						jobId: schema.jobMembers.jobId,
+						staffId: schema.jobMembers.staffId,
+					})
+					.from(schema.jobMembers)
+					.where(inArray(schema.jobMembers.jobId, ids)),
 			])
-		: [[], []];
+		: [[], [], []];
 	return rows.map(({ job, clientName, picName }) => {
 		const own = tasks.filter((t) => t.jobId === job.id);
 		return {
 			...job,
 			clientName,
 			picName,
+			memberIds: members
+				.filter((m) => m.jobId === job.id)
+				.map((m) => m.staffId),
 			tasksTotal: own.length,
 			tasksDone: own.filter((t) => t.status === "done").length,
 			blocked: own.filter((t) => t.status === "blocked").length,
@@ -1225,6 +1238,7 @@ const getJob = os
 					.where(eq(schema.staff.businessId, job.businessId)),
 			]);
 		if (!client || !quote || !request) throw new ORPCError("NOT_FOUND");
+		const members = await loadMembers(db, job.id);
 		const handoverTask = await db.query.workflowTasks.findFirst({
 			where: eq(
 				schema.workflowTasks.key,
@@ -1252,6 +1266,7 @@ const getJob = os
 			brief: quote.requirementsSnapshot ?? request.brief,
 			tasks,
 			chat,
+			members,
 			relays: relays.map((r) => ({
 				...r,
 				askedBy: nameOf(r.askedById),
@@ -1312,15 +1327,30 @@ const deleteJobTask = os
 		return { ok: true };
 	});
 
-const askJob = os
+/** Post in the job's team group. The AI replies only when the message tags @AI. */
+const postJobChat = os
 	.input(
 		z.object({
 			jobId: z.string(),
 			staffId: z.string(),
-			question: z.string().trim().min(1).max(1000),
+			body: z.string().trim().min(1).max(2000),
 		}),
 	)
-	.handler(({ input }) => askJobAssistant(input).catch(fail));
+	.handler(({ input }) => postJobMessage(input).catch(fail));
+
+const jobMemberInput = z.object({
+	jobId: z.string(),
+	staffId: z.string(), // who is doing it
+	memberId: z.string(), // who is added or removed
+});
+
+const addMember = os
+	.input(jobMemberInput)
+	.handler(({ input }) => addJobMember(input).catch(fail));
+
+const removeMember = os
+	.input(jobMemberInput)
+	.handler(({ input }) => removeJobMember(input).catch(fail));
 
 const createRelay = os
 	.input(
@@ -1556,7 +1586,8 @@ export default {
 		get: getJob,
 		update: updateJobInput,
 		retryHandover,
-		ask: askJob,
+		chat: { post: postJobChat },
+		members: { add: addMember, remove: removeMember },
 		tasks: { add: addJobTask, update: updateJobTask, delete: deleteJobTask },
 	},
 	relays: {

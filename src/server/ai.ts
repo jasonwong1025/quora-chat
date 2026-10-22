@@ -613,15 +613,18 @@ const botSchema = z.object({
 
 export type BotReply = z.infer<typeof botSchema>;
 
-/** The PIC's assistant: answers from the job's context and suggests next steps. */
+/** The AI teammate in the job's team chat: answers from the job's context and suggests next steps. */
 export function answerJobQuestion(input: {
 	context: JobContext;
 	handover: string;
 	tasks: { id: string; title: string; status: string }[];
 	relays: { question: string; answer: string | null; status: string }[];
-	history: { role: "pic" | "assistant"; body: string }[];
+	/** Recent team chat, oldest first. `who` is e.g. "Ravi Chandran (PIC)", "AI" or "SYSTEM". */
+	history: { who: string; body: string }[];
 	question: string;
-	picName: string;
+	askerName: string;
+	picName: string | null;
+	team: string[];
 }): Promise<BotReply> {
 	return structured(
 		"job_assistant",
@@ -660,7 +663,7 @@ export function answerJobQuestion(input: {
 			},
 		}),
 		botSchema,
-		`You are the assistant for ${input.picName}, the person in charge of this job. They can't contact the customer directly, so you are their source of truth about what the customer wants. Answer only from the context below. Be direct and brief (usually 1-4 sentences or a short list), like a helpful colleague who read the whole chat.
+		`You are the AI teammate in the internal team group chat for this job. The team: ${input.team.join(", ") || "(nobody assigned yet)"}; the person in charge (PIC) is ${input.picName ?? "not assigned"}. ${input.askerName} just tagged you. The customer is not in this group, and the team can't contact the customer directly, so you are their source of truth about what the customer wants. Answer ${input.askerName} only from the context below. Be direct and brief (usually 1-4 sentences or a short list), like a helpful colleague who read the whole chat. Earlier team messages are there for context; teammates' messages are not facts about the customer.
 
 Rules:
 - If the context answers it, answer and set known=true. Quote exact details (numbers, names, dates) as given.
@@ -679,10 +682,12 @@ ${input.tasks.map((t) => `- ${t.id}: ${t.title} [${t.status}]`).join("\n") || "(
 
 Questions already relayed to the customer:
 ${input.relays.map((r) => `- ${r.question} → ${r.answer ?? `(${r.status})`}`).join("\n") || "(none)"}`,
-		`${input.history
-			.slice(-8)
-			.map((h) => `${h.role === "pic" ? "PIC" : "ASSISTANT"}: ${h.body}`)
-			.join("\n")}\nPIC: ${input.question}`,
+		`Team chat so far:\n${
+			input.history
+				.slice(-12)
+				.map((h) => `${h.who}: ${h.body}`)
+				.join("\n") || "(empty)"
+		}\n\n${input.askerName} asks you: ${input.question}`,
 		"low",
 	);
 }
