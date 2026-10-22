@@ -1,6 +1,7 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { FastForward, Loader2 } from "lucide-react";
 import { toast } from "sonner";
+import { AiModeBadge } from "#/components/ai-mode";
 import { useWorkspace } from "#/components/orbyte/workspace";
 import { orpc } from "#/orpc/client";
 
@@ -26,6 +27,7 @@ export function DemoClock() {
 
 	return (
 		<div className="rounded-lg border border-dashed border-white/20 px-2.5 py-2">
+			<AiModeBadge className="mb-1.5 text-white/70" />
 			<p className="flex items-center gap-1.5 text-[11px] font-medium text-white/60">
 				{skip.isPending ? (
 					<Loader2 className="size-3 animate-spin" />

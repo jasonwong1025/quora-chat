@@ -18,7 +18,9 @@ import {
 } from "lucide-react";
 import { Fragment, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
+import { useAiMode } from "#/components/ai-mode";
 import { fileToThumb } from "#/components/orbyte/product-image";
+import { flagshipScenario, scriptKey } from "#/data/demo-scenario";
 import { clock, dayLabel } from "#/lib/time";
 import type { ConversationDetail, WhatsappChat } from "#/lib/types";
 import { cn } from "#/lib/utils";
@@ -146,6 +148,19 @@ export function ChatWindow(props: {
 	}
 
 	const busy = pending !== null || typing;
+	const aiInfo = useAiMode();
+	// The flagship demo: offer the next scripted line (in order) for Kilat.
+	const said = new Set(
+		messages
+			.filter((m) => m.sender === "customer")
+			.map((m) => scriptKey(m.body)),
+	);
+	const nextStep =
+		business.id === flagshipScenario.businessId
+			? flagshipScenario.steps
+					.map((s, index) => ({ ...s, index }))
+					.find((s) => !said.has(scriptKey(s.say)))
+			: undefined;
 
 	return (
 		<div className="flex h-full min-w-0 flex-col">
@@ -188,6 +203,8 @@ export function ChatWindow(props: {
 						<Lock className="mt-0.5 size-3 shrink-0" />
 						Simulated WhatsApp for the Quora Chat demo. Messages go to{" "}
 						{business.name} through Orbyte.
+						{aiInfo?.aiMode === "replay" &&
+							" Replay mode: the AI's replies are scripted for this demo."}
 					</p>
 
 					{messages.length === 0 && !pending && (
@@ -268,6 +285,22 @@ export function ChatWindow(props: {
 				</div>
 			</div>
 
+			{nextStep && !file && (
+				<div className="flex items-center gap-2 bg-[var(--wa-app)] px-4 pt-2">
+					<span className="shrink-0 text-[11px] text-[var(--wa-muted)]">
+						Demo script {nextStep.index + 1}/{flagshipScenario.steps.length}
+					</span>
+					<button
+						type="button"
+						disabled={busy}
+						onClick={() => send(nextStep.say)}
+						title={nextStep.note}
+						className="min-w-0 truncate rounded-full border border-[var(--wa-border)] bg-[var(--wa-in)] px-3 py-1 text-left text-sm hover:bg-[var(--wa-hover)] disabled:opacity-50"
+					>
+						{nextStep.say}
+					</button>
+				</div>
+			)}
 			{file && (
 				<div className="flex items-center gap-3 bg-[var(--wa-app)] px-6 pt-2">
 					<div className="flex min-w-0 items-center gap-2 rounded-lg bg-[var(--wa-in)] px-3 py-2 text-sm">

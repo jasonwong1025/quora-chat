@@ -1449,3 +1449,200 @@ test("knowledge base: the team AI reads internal docs; the customer AI only ever
 		/Only an approver/,
 	);
 });
+
+test("flagship demo (replay mode): Kilat flyers from first message to an actionable handover", async () => {
+	const db = getDb();
+	const { flagshipScenario } = await import("../../src/data/demo-scenario");
+	const { demoBusinesses } = await import("../../src/data/demo");
+	const { demoKnowledge } = await import("../../src/data/demo-knowledge");
+	// The real Kilat demo setup: catalog, presets, pricing rules and knowledge.
+	const kilat = demoBusinesses.find((b) => b.id === "kilat-print");
+	assert.ok(kilat);
+	await db.insert(schema.businesses).values({
+		id: kilat.id,
+		name: kilat.name,
+		quotePrefix: kilat.quotePrefix,
+		industry: kilat.industry,
+		sstRateBps: kilat.sstRateBps,
+		quoteValidityDays: kilat.quoteValidityDays,
+	});
+	const staff = await db
+		.insert(schema.staff)
+		.values(kilat.staff.map((x) => ({ ...x, businessId: kilat.id })))
+		.returning();
+	await db.insert(schema.products).values(
+		kilat.products.map(({ questions: _q, ...p }) => ({
+			...p,
+			businessId: kilat.id,
+		})),
+	);
+	const q = (
+		scope: "business" | "category",
+		list: typeof kilat.businessQuestions,
+		category?: string,
+	) =>
+		list.map((x, position) => ({
+			businessId: kilat.id,
+			scope,
+			category: category ?? null,
+			key: x.key,
+			label: x.label,
+			type: x.type,
+			options: x.options ?? [],
+			required: x.required ?? true,
+			position,
+			hint: x.hint ?? null,
+			showIf: x.showIf ?? null,
+			onQuote: x.onQuote ?? (x.type === "single" || x.type === "multi"),
+		}));
+	await db
+		.insert(schema.intakeQuestions)
+		.values([
+			...q("business", kilat.businessQuestions),
+			...Object.entries(kilat.categoryQuestions).flatMap(([c, list]) =>
+				q("category", list, c),
+			),
+		]);
+	await db
+		.insert(schema.pricingRules)
+		.values(kilat.rules.map((r) => ({ ...r, businessId: kilat.id })));
+	await db
+		.insert(schema.knowledgeDocs)
+		.values(
+			demoKnowledge[kilat.id].map((d) => ({ ...d, businessId: kilat.id })),
+		);
+	const ravi = staff.find((x) => x.name === "Ravi Chandran");
+	const aina = staff.find((x) => x.canApprove);
+	assert.ok(ravi && aina);
+	await db.insert(schema.categorySettings).values({
+		businessId: kilat.id,
+		category: "Flyers",
+		defaultPicId: ravi.id,
+	});
+	const [chat] = await db
+		.insert(schema.conversations)
+		.values({
+			businessId: kilat.id,
+			customerName: flagshipScenario.customerName,
+		})
+		.returning();
+
+	process.env.AI_MODE = "replay";
+	try {
+		const say = async (body: string) => {
+			for await (const _ of handleCustomerMessage({
+				conversationId: chat.id,
+				body,
+			})) {
+				/* drain */
+			}
+			return (
+				(
+					await db
+						.select()
+						.from(schema.messages)
+						.where(eq(schema.messages.conversationId, chat.id))
+						.orderBy(schema.messages.createdAt)
+				).at(-1)?.body ?? ""
+			);
+		};
+		const request = async () => {
+			const r = await db.query.quoteRequests.findFirst({
+				where: eq(schema.quoteRequests.conversationId, chat.id),
+			});
+			assert.ok(r);
+			return r;
+		};
+		const steps = flagshipScenario.steps.map((x) => x.say);
+
+		// 1-4: incomplete enquiry, clarified with presets and the public FAQ.
+		assert.match(await say(steps[0]), /Flyer A5 atau Flyer A4/);
+		const faq = await say(steps[1]);
+		assert.match(faq, /PDF works best/); // answered from the public FAQ
+		assert.match(faq, /paper/i); // and the next preset questions
+		await say(steps[2]);
+		const recap = await say(steps[3]);
+		assert.match(recap, /Ringkasan/);
+		assert.equal((await request()).status, "confirming");
+
+		// 5: confirmed, drafted by the pricing engine. 1000 pcs @ RM0.12 + RM0.05 double-sided.
+		await say(steps[4]);
+		const first = await db.query.quotes.findFirst({
+			where: eq(schema.quotes.requestId, (await request()).id),
+		});
+		assert.ok(first);
+		assert.equal(first.subtotalSen, 1000 * 17);
+
+		// 6: the customer changes the quantity before approval: the draft is outdated.
+		await say(steps[5]);
+		await assert.rejects(
+			decideQuote({
+				quoteId: first.id,
+				staffId: aina.id,
+				decision: "approved",
+				reviewToken: quoteReviewToken(first),
+			}),
+			/Requirements changed|not been reviewed|Finish clarifying/,
+		);
+
+		// 7: confirmed again; the draft is re-prepared for 2000 pcs and approved.
+		await say(steps[6]);
+		const current = await db.query.quotes.findFirst({
+			where: eq(schema.quotes.requestId, (await request()).id),
+		});
+		assert.ok(current);
+		assert.equal(current.id, first.id); // the same draft, updated
+		assert.equal(current.subtotalSen, 2000 * 17);
+		await decideQuote({
+			quoteId: current.id,
+			staffId: aina.id,
+			decision: "approved",
+			reviewToken: quoteReviewToken(current),
+		});
+
+		// 8: signed; the worker creates the job for the Flyers PIC.
+		await signQuote({ ...signature(current.id), signerName: "Kak Ros" });
+		await runNextTask();
+		await runNextTask();
+		const job = await db.query.jobs.findFirst({
+			where: eq(schema.jobs.quoteId, current.id),
+		});
+		assert.ok(job?.handover);
+		assert.equal(job.picId, ravi.id);
+		assert.equal(job.kind, "job_order");
+		assert.ok(
+			job.handover.requirements.some((r) => r.value === "157gsm art paper"),
+		);
+		assert.ok(job.handover.promises.some((p) => /self pickup/.test(p)));
+
+		// 9: the PIC asks the AI for the agreed requirements in the team chat.
+		const { reply } = await postJobMessage({
+			jobId: job.id,
+			staffId: ravi.id,
+			body: "@AI what did the customer agree to?",
+		});
+		assert.ok(reply);
+		assert.match(reply.body, /2000|157gsm art paper/);
+		assert.match(reply.body, /self pickup/);
+		assert.ok(reply.sources.some((x) => x.kind === "brief"));
+
+		// The AI says so when nothing covers a question, and offers to ask the customer.
+		const { reply: unknown } = await postJobMessage({
+			jobId: job.id,
+			staffId: ravi.id,
+			body: "@AI zebra spaceship?",
+		});
+		assert.equal(unknown?.actions[0]?.kind, "ask_customer");
+
+		// Off-script messages go to staff instead of being guessed.
+		await say("Boleh buat bunting juga?");
+		const runs = await db
+			.select()
+			.from(schema.aiRuns)
+			.where(eq(schema.aiRuns.conversationId, chat.id))
+			.orderBy(schema.aiRuns.createdAt);
+		assert.equal(runs.at(-1)?.status, "failed");
+	} finally {
+		delete process.env.AI_MODE;
+	}
+});

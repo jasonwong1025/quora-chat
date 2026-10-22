@@ -2,6 +2,16 @@ import OpenAI from "openai";
 import { z } from "zod";
 import type { Language } from "#/db/schema";
 import type { Passage } from "#/lib/knowledge";
+import {
+	isReplay,
+	REPLAY_MODEL,
+	replayCustomerQuestion,
+	replayFollowUp,
+	replayHandover,
+	replayJobAnswer,
+	replayReadTurn,
+	replayReply,
+} from "./ai-replay";
 
 let client: OpenAI | undefined;
 
@@ -23,7 +33,9 @@ function getClient() {
 // OpenRouter model ids are "provider/model". The model must support
 // structured outputs (json_schema), which reading relies on.
 const model = () => process.env.AI_MODEL || "openai/gpt-5-mini";
-export const aiModelName = model;
+/** What the AI thinking log records as the model; replay mode says so. */
+export const aiModelName = () => (isReplay() ? REPLAY_MODEL : model());
+export const aiMode = () => (isReplay() ? "replay" : "live");
 
 /** One chat call that must return JSON matching `jsonSchema`, checked again with zod. */
 // Reasoning models are slow at high effort; these tasks are narrow, so keep it low.
@@ -225,6 +237,7 @@ const readJsonSchema = obj({
 
 /** Reads the latest customer message into the requirement brief. */
 export function readTurn(input: ReadInput): Promise<Reading> {
+	if (isReplay()) return Promise.resolve().then(() => replayReadTurn(input));
 	const system = `You keep a requirement brief for "${input.businessName}" (${input.industry}, Malaysia) up to date while a customer chats with them on WhatsApp. Customers write in English, Bahasa Melayu, Chinese, or a mix (Manglish, code-switching).
 
 Catalog: products and services, each with the questions we need answered (JSON):
@@ -357,6 +370,7 @@ function planText(plan: ReplyPlan) {
 
 /** Writes the WhatsApp message to send. Code decides what to ask; the AI decides how to say it. */
 export async function writeReply(input: ReplyInput): Promise<string> {
+	if (isReplay()) return replayReply(input);
 	const b = input.business;
 	const info = [
 		b.tagline && `About us: ${b.tagline}`,
@@ -472,6 +486,10 @@ export async function suggestQuestions(input: {
 	existing: { key: string; label: string }[];
 	ruleKeys: string[];
 }) {
+	if (isReplay())
+		throw new Error(
+			"Suggesting questions needs a live AI model; replay mode only covers the demo script.",
+		);
 	const t = input.target;
 	const what =
 		t.kind === "product"
@@ -559,6 +577,7 @@ export type HandoverDraft = z.infer<typeof handoverSchema>;
 
 /** Writes the PIC's briefing and a starting task list from the chat, brief and quote. */
 export function writeHandover(c: JobContext): Promise<HandoverDraft> {
+	if (isReplay()) return Promise.resolve(replayHandover(c));
 	return structured(
 		"handover",
 		obj({
@@ -637,6 +656,7 @@ export function answerJobQuestion(input: {
 	/** Company knowledge base passages (internal and public), refs k1, k2… */
 	knowledge: (Passage & { ref: string })[];
 }): Promise<BotReply> {
+	if (isReplay()) return Promise.resolve(replayJobAnswer(input));
 	return structured(
 		"job_assistant",
 		obj({
@@ -717,6 +737,7 @@ export async function draftCustomerQuestion(input: {
 	question: string;
 	recentChat: ChatTurn[];
 }): Promise<string> {
+	if (isReplay()) return replayCustomerQuestion(input);
 	const res = await getClient().chat.completions.create({
 		model: model(),
 		reasoning_effort: "minimal",
@@ -741,6 +762,13 @@ export function readRelayAnswer(input: {
 	reply: string;
 	hasAttachment: boolean;
 }) {
+	// Replay: any reply to a relayed question counts as its answer.
+	if (isReplay())
+		return Promise.resolve({
+			answers: Boolean(input.reply.trim()),
+			answer: input.reply.trim() || null,
+			changesScope: false,
+		});
 	return structured(
 		"relay_answer",
 		obj({
@@ -777,6 +805,12 @@ export function planFollowUpTiming(input: {
 	recentChat: ChatTurn[];
 	now: string;
 }) {
+	if (isReplay())
+		return Promise.resolve({
+			waitHours: input.opened ? 24 : 48,
+			reason:
+				"Replay mode: standard timing (a day after opening, else two days).",
+		});
 	return structured(
 		"follow_up_timing",
 		obj({ waitHours: { type: "number" }, reason: str }),
@@ -807,6 +841,7 @@ export async function writeFollowUp(input: {
 	extendedUntil: string | null; // set when we just extended validity
 	recentChat: ChatTurn[];
 }) {
+	if (isReplay()) return replayFollowUp(input);
 	const situation = input.extendedUntil
 		? `The quotation's validity just ran out, so we've kindly extended it once, until ${input.extendedUntil}. Let them know, no pressure, and that they can still review and sign it from the quotation above.`
 		: input.final

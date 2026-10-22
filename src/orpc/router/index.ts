@@ -14,7 +14,7 @@ import { z } from "zod";
 import { getDemoBusiness } from "#/data/demo";
 import { getDb, schema } from "#/db";
 import { suggestSku, uniqueSku } from "#/lib/sku";
-import { suggestQuestions } from "#/server/ai";
+import { aiMode, aiModelName, suggestQuestions } from "#/server/ai";
 import { fastForward, followUpAction } from "#/server/followups";
 import {
 	addJobMember,
@@ -1572,6 +1572,12 @@ const previewKnowledge = os
 		return { team, customer };
 	});
 
+/** Which AI the server uses, so both interfaces can label replay mode. */
+const systemInfo = os.handler(() => ({
+	aiMode: aiMode(),
+	model: aiModelName(),
+}));
+
 /** Demo only: pretend days have passed for one business. */
 const demoFastForward = os
 	.input(businessInput.extend({ days: z.number().int().min(1).max(30) }))
@@ -1621,6 +1627,7 @@ export default {
 	},
 	followUpRules: { update: updateFollowUpRules },
 	demo: { fastForward: demoFastForward },
+	system: { info: systemInfo },
 	jobs: {
 		list: listJobs,
 		get: getJob,
