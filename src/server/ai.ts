@@ -1,6 +1,7 @@
 import OpenAI from "openai";
 import { z } from "zod";
 import type { Language } from "#/db/schema";
+import type { Passage } from "#/lib/knowledge";
 
 let client: OpenAI | undefined;
 
@@ -318,6 +319,8 @@ export type ReplyInput = {
 	notOffered: string[]; // things they asked for that we don't sell
 	history: ChatTurn[];
 	firstReply: boolean;
+	/** Public knowledge-base passages only; internal docs never reach the customer AI. */
+	knowledge?: Passage[];
 };
 
 function planText(plan: ReplyPlan) {
@@ -363,6 +366,9 @@ export async function writeReply(input: ReplyInput): Promise<string> {
 	]
 		.filter(Boolean)
 		.join("\n");
+	const faq = (input.knowledge ?? [])
+		.map((p) => `[${p.title}]\n${p.text}`)
+		.join("\n\n");
 
 	const system = `You are a staff member at "${b.name}" (${b.industry}, Malaysia), replying to a customer on WhatsApp. Write the way a friendly, experienced person at a small Malaysian business actually texts: warm, relaxed, short and clear. Not a bot, not a call centre.
 
@@ -378,7 +384,7 @@ How to write:
 - Plain text. *bold* only if really useful. No sign-off or signature, and don't add our address or phone unless they ask.
 
 What you know about the business (use only this, never make things up):
-${info || "(nothing extra)"}`;
+${info || "(nothing extra)"}${faq ? `\n\nThe business's published FAQ (you may use it to answer their question, in your own words; still never mention prices):\n${faq}` : ""}`;
 
 	const extra = [
 		input.customerQuestion &&
@@ -512,6 +518,8 @@ export type JobContext = {
 	/** The WhatsApp conversation; ref is a short id the AI can cite. */
 	chat: { ref: string; who: string; at: string; body: string }[];
 	catalog: string[]; // descriptions of the products involved
+	/** Internal knowledge-base passages relevant to this job (SOPs, policies). */
+	knowledge?: Passage[];
 };
 
 function contextText(c: JobContext) {
@@ -530,7 +538,7 @@ ${c.files.map((f) => `- [${f.ref}] ${f.name}`).join("\n") || "(none)"}
 
 Products involved:
 ${c.catalog.map((l) => `- ${l}`).join("\n") || "(none)"}
-
+${c.knowledge?.length ? `\nOur internal procedures that apply (follow them when planning; never share them with the customer):\n${c.knowledge.map((k) => `- ${k.title}: ${k.text.replace(/\s+/g, " ")}`).join("\n")}\n` : ""}
 WhatsApp conversation (each line has a reference id in brackets):
 ${c.chat.map((m) => `[${m.ref}] ${m.at} ${m.who}: ${m.body}`).join("\n")}`;
 }
@@ -597,6 +605,7 @@ const botSchema = z.object({
 				"file",
 				"relay",
 				"catalog",
+				"knowledge",
 			]),
 			label: z.string(),
 			ref: z.string().nullable(),
@@ -625,6 +634,8 @@ export function answerJobQuestion(input: {
 	askerName: string;
 	picName: string | null;
 	team: string[];
+	/** Company knowledge base passages (internal and public), refs k1, k2… */
+	knowledge: (Passage & { ref: string })[];
 }): Promise<BotReply> {
 	return structured(
 		"job_assistant",
@@ -644,6 +655,7 @@ export function answerJobQuestion(input: {
 							"file",
 							"relay",
 							"catalog",
+							"knowledge",
 						],
 					},
 					label: str,
@@ -668,7 +680,8 @@ export function answerJobQuestion(input: {
 Rules:
 - If the context answers it, answer and set known=true. Quote exact details (numbers, names, dates) as given.
 - If it doesn't, say clearly that the customer didn't say, set known=false, and suggest an ask_customer action with a clear question we could ask them.
-- sources: where you found it. kind "chat" with ref = the bracketed message id (e.g. "m12"), "file" with the file ref, or "brief" / "quote" / "handover" / "relay" / "catalog" with ref null. label = a few words on what it shows.
+- The company knowledge base (SOPs, policies, specs) is internal: use it for how we do things, but what the customer agreed always comes from the brief, quote and chat. If the two conflict, say so.
+- sources: where you found it. kind "chat" with ref = the bracketed message id (e.g. "m12"), "file" with the file ref, "knowledge" with ref = the knowledge passage id (e.g. "k2"), or "brief" / "quote" / "handover" / "relay" / "catalog" with ref null. label = a few words on what it shows.
 - actions: suggest only when genuinely useful, max 3. add_task (text = task title), flag_blocker (text = what's blocking; taskId = an existing task id if it applies, else null), ask_customer (text = the question for the customer, in plain English). Don't suggest a task that already exists.
 - Never invent facts or prices.
 
@@ -681,7 +694,10 @@ Tasks (id: title [status]):
 ${input.tasks.map((t) => `- ${t.id}: ${t.title} [${t.status}]`).join("\n") || "(none)"}
 
 Questions already relayed to the customer:
-${input.relays.map((r) => `- ${r.question} → ${r.answer ?? `(${r.status})`}`).join("\n") || "(none)"}`,
+${input.relays.map((r) => `- ${r.question} → ${r.answer ?? `(${r.status})`}`).join("\n") || "(none)"}
+
+Company knowledge base (most relevant passages; internal):
+${input.knowledge.map((k) => `[${k.ref}] ${k.title} (${k.category})\n${k.text}`).join("\n\n") || "(nothing relevant)"}`,
 		`Team chat so far:\n${
 			input.history
 				.slice(-12)

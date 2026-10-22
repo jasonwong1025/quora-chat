@@ -3,6 +3,7 @@
  * Run with: pnpm db:seed
  */
 import { type DemoQuestion, demoBusinesses } from "../data/demo";
+import { demoKnowledge } from "../data/demo-knowledge";
 import { getDb, schema } from "./index";
 
 /** A demo question as a database row, keeping the listed order. */
@@ -87,6 +88,15 @@ async function main() {
 			await tx
 				.insert(schema.pricingRules)
 				.values(b.rules.map((r) => ({ ...r, businessId: b.id })));
+			const docs = demoKnowledge[b.id] ?? [];
+			if (docs.length)
+				await tx.insert(schema.knowledgeDocs).values(
+					docs.map((d) => ({
+						...d,
+						businessId: b.id,
+						updatedBy: b.staff.find((s) => s.canApprove)?.name ?? null,
+					})),
+				);
 		}
 	});
 

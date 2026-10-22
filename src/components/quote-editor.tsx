@@ -126,113 +126,125 @@ export function QuoteEditor(props: {
 				</a>
 			</div>
 
-			<div className="overflow-x-auto">
-				<table className="w-full text-sm">
-					<thead className="text-xs text-muted-foreground">
-						<tr className="border-b">
-							<th className="px-3 py-1.5 text-left font-medium">Item</th>
-							<th className="w-20 px-1 py-1.5 text-right font-medium">Qty</th>
-							<th className="w-24 px-1 py-1.5 text-right font-medium">
-								Unit (RM)
-							</th>
-							<th className="w-24 px-3 py-1.5 text-right font-medium">
-								Amount
-							</th>
-							{editable && <th className="w-8" />}
-						</tr>
-					</thead>
-					<tbody>
-						{lines.map((l, i) => (
-							<tr
-								key={`${quote.id}-${i}`}
-								className="border-b align-top last:border-0"
-							>
-								<td className="min-w-44 px-3 py-1.5">
-									{editable ? (
-										<Input
-											value={l.description}
-											onChange={(e) =>
-												patch(i, { description: e.target.value })
-											}
-											className="h-8"
-										/>
-									) : (
-										l.description
-									)}
-									{l.notes && (
-										<p className="mt-0.5 text-xs text-muted-foreground">
-											{l.notes}
-										</p>
-									)}
-								</td>
-								<td className="px-1 py-1.5 text-right">
-									{editable ? (
-										<Input
-											type="number"
-											min={1}
-											value={l.quantity}
-											onChange={(e) =>
-												patch(i, {
-													quantity: Math.max(1, Number(e.target.value) || 1),
-												})
-											}
-											className="h-8 text-right"
-										/>
-									) : (
-										`${l.quantity} ${l.unit}`
-									)}
-								</td>
-								<td className="px-1 py-1.5 text-right">
-									{editable ? (
-										<Input
-											type="number"
-											min={0}
-											step="0.01"
-											value={(l.unitPriceSen / 100).toFixed(2)}
-											onChange={(e) =>
-												patch(i, {
-													unitPriceSen: parseMYR(e.target.value) ?? 0,
-												})
-											}
-											className={`h-8 text-right ${l.unitPriceSen === 0 ? "border-status-review" : ""}`}
-										/>
-									) : (
-										formatMYR(l.unitPriceSen)
-									)}
-								</td>
-								<td className="px-3 py-1.5 text-right tabular-nums">
-									{formatMYR(l.amountSen)}
-								</td>
-								{editable && (
-									<td className="py-1.5 pr-2">
-										<Button
-											variant="ghost"
-											size="icon"
-											className="size-8"
-											onClick={() => {
-												setDirty(true);
-												setLines((ls) => ls.filter((_, idx) => idx !== i));
-											}}
-										>
-											<Trash2 className="size-4" />
-										</Button>
-									</td>
+			{editable ? (
+				// Editing: one card per line, so the fields stay usable in a narrow side panel.
+				<ul className="divide-y">
+					{lines.map((l, i) => (
+						<li key={`${quote.id}-${i}`} className="space-y-2 px-3 py-2.5">
+							<div>
+								<Input
+									aria-label={`Line ${i + 1} description`}
+									value={l.description}
+									onChange={(e) => patch(i, { description: e.target.value })}
+									className="h-8"
+								/>
+								{l.notes && (
+									<p className="mt-1 text-xs text-muted-foreground">
+										{l.notes}
+									</p>
 								)}
-							</tr>
-						))}
-						{lines.length === 0 && (
-							<tr>
-								<td
-									colSpan={5}
-									className="px-3 py-4 text-center text-xs text-muted-foreground"
+							</div>
+							<div className="grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto_auto] items-end gap-2">
+								<div className="min-w-0 space-y-0.5 text-xs text-muted-foreground">
+									<label htmlFor={`${quote.id}-qty-${i}`}>
+										Qty{l.unit ? ` (${l.unit})` : ""}
+									</label>
+									<Input
+										id={`${quote.id}-qty-${i}`}
+										type="number"
+										min={1}
+										value={l.quantity}
+										onChange={(e) =>
+											patch(i, {
+												quantity: Math.max(1, Number(e.target.value) || 1),
+											})
+										}
+										className="h-8 text-right text-sm text-foreground"
+									/>
+								</div>
+								<div className="min-w-0 space-y-0.5 text-xs text-muted-foreground">
+									<label htmlFor={`${quote.id}-price-${i}`}>Unit (RM)</label>
+									<Input
+										id={`${quote.id}-price-${i}`}
+										type="number"
+										min={0}
+										step="0.01"
+										value={(l.unitPriceSen / 100).toFixed(2)}
+										onChange={(e) =>
+											patch(i, {
+												unitPriceSen: parseMYR(e.target.value) ?? 0,
+											})
+										}
+										className={`h-8 text-right text-sm text-foreground ${l.unitPriceSen === 0 ? "border-status-review" : ""}`}
+									/>
+								</div>
+								<div className="space-y-0.5 text-right">
+									<span className="text-xs text-muted-foreground">Amount</span>
+									<p className="flex h-8 items-center justify-end text-sm font-medium whitespace-nowrap tabular-nums">
+										{formatMYR(l.amountSen)}
+									</p>
+								</div>
+								<Button
+									variant="ghost"
+									size="icon"
+									className="size-8"
+									aria-label={`Remove line ${i + 1}`}
+									onClick={() => {
+										setDirty(true);
+										setLines((ls) => ls.filter((_, idx) => idx !== i));
+									}}
 								>
-									No priced lines yet — add them manually after assessment.
-								</td>
+									<Trash2 className="size-4" />
+								</Button>
+							</div>
+						</li>
+					))}
+					{lines.length === 0 && (
+						<li className="px-3 py-4 text-center text-xs text-muted-foreground">
+							No priced lines yet — add them manually after assessment.
+						</li>
+					)}
+				</ul>
+			) : (
+				<div className="overflow-x-auto">
+					<table className="w-full text-sm">
+						<thead className="text-xs text-muted-foreground">
+							<tr className="border-b">
+								<th className="px-3 py-1.5 text-left font-medium">Item</th>
+								<th className="px-1 py-1.5 text-right font-medium">Qty</th>
+								<th className="px-1 py-1.5 text-right font-medium">Unit</th>
+								<th className="px-3 py-1.5 text-right font-medium">Amount</th>
 							</tr>
-						)}
-					</tbody>
-				</table>
-			</div>
+						</thead>
+						<tbody>
+							{lines.map((l, i) => (
+								<tr
+									key={`${quote.id}-${i}`}
+									className="border-b align-top last:border-0"
+								>
+									<td className="px-3 py-1.5">
+										{l.description}
+										{l.notes && (
+											<p className="mt-0.5 text-xs text-muted-foreground">
+												{l.notes}
+											</p>
+										)}
+									</td>
+									<td className="px-1 py-1.5 text-right whitespace-nowrap">
+										{l.quantity} {l.unit}
+									</td>
+									<td className="px-1 py-1.5 text-right whitespace-nowrap tabular-nums">
+										{formatMYR(l.unitPriceSen)}
+									</td>
+									<td className="px-3 py-1.5 text-right whitespace-nowrap tabular-nums">
+										{formatMYR(l.amountSen)}
+									</td>
+								</tr>
+							))}
+						</tbody>
+					</table>
+				</div>
+			)}
 
 			{editable && (
 				<div className="px-3 py-2">

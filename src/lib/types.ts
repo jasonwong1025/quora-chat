@@ -18,3 +18,4 @@ export type PricingRule = BusinessDetail["rules"][number];
 export type JobRow = Outputs["jobs"]["list"][number];
 export type JobDetail = Outputs["jobs"]["get"];
 export type Notification = Outputs["notifications"]["list"][number];
+export type KnowledgeDocRow = Outputs["knowledge"]["list"][number];

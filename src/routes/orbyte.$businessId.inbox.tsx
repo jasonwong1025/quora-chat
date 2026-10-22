@@ -48,7 +48,7 @@ function Inbox() {
 		<div className="flex h-full min-h-0">
 			<aside
 				className={cn(
-					"flex w-full shrink-0 flex-col border-r bg-card md:w-80",
+					"flex w-full shrink-0 flex-col border-r bg-card md:w-72 2xl:w-80",
 					selected && "hidden md:flex",
 				)}
 			>
@@ -218,10 +218,14 @@ function Conversation({ row, onBack }: { row: InboxRow; onBack: () => void }) {
 	const mine = row.aiPaused && row.handledBy === me?.id;
 	// The customer spoke last and the AI is still on: it is working on a reply.
 	// (The thinking card shows this itself once its run has started.)
+	const lastCustomer = [...messages]
+		.reverse()
+		.find((m) => m.sender === "customer");
 	const aiWorking =
 		row.awaitingReply &&
 		!row.aiPaused &&
-		!runs.some((r) => r.status === "running");
+		Boolean(lastCustomer) &&
+		!runs.some((r) => r.messageId === lastCustomer?.id);
 
 	async function toggle(takeOver: boolean) {
 		if (!me) return toast.error("Choose who you are signed in as first");
@@ -255,11 +259,11 @@ function Conversation({ row, onBack }: { row: InboxRow; onBack: () => void }) {
 	const chat = (
 		<section
 			className={cn(
-				"flex min-w-0 flex-1 flex-col bg-[var(--orb-gray)]",
-				view === "request" && "hidden xl:flex",
+				"min-w-0 flex-1 flex-col bg-[var(--orb-gray)]",
+				view === "request" ? "hidden @4xl:flex" : "flex",
 			)}
 		>
-			<div className="min-h-0 flex-1 overflow-y-auto px-4 py-4 sm:px-8">
+			<div className="min-h-0 flex-1 overflow-y-auto px-3 py-4 @xl:px-6 @3xl:px-8">
 				<div className="flex flex-col gap-1.5">
 					{messages.map((m, i) => {
 						const prev = messages[i - 1];
@@ -279,7 +283,7 @@ function Conversation({ row, onBack }: { row: InboxRow; onBack: () => void }) {
 								)}
 								<div
 									className={cn(
-										"max-w-[80%] rounded-2xl px-3.5 py-2 text-sm shadow-sm",
+										"max-w-[88%] rounded-2xl px-3.5 py-2 text-sm break-words shadow-sm @xl:max-w-[80%]",
 										!out && "self-start rounded-tl-sm border bg-card",
 										m.sender === "assistant" &&
 											"self-end rounded-tr-sm bg-[#dff4ff]",
@@ -443,30 +447,41 @@ function Conversation({ row, onBack }: { row: InboxRow; onBack: () => void }) {
 	);
 
 	return (
-		<div className="flex min-w-0 flex-1 flex-col">
-			<header className="flex flex-wrap items-center gap-3 border-b bg-card px-4 py-2.5">
+		// Sized by the space this pane has (not the window), since the app sidebar
+		// and chat list take a varying share of the screen.
+		<div className="@container flex min-w-0 flex-1 flex-col">
+			<header className="flex items-center gap-2 border-b bg-card px-3 py-2.5 @xl:gap-3 @xl:px-4">
 				<button
 					type="button"
 					onClick={onBack}
-					className="text-sm text-primary md:hidden"
+					className="shrink-0 text-sm text-primary md:hidden"
 				>
 					← Chats
 				</button>
-				<Avatar name={row.customerName} className="size-9" />
+				<Avatar name={row.customerName} className="hidden size-9 @md:flex" />
 				<div className="min-w-0 flex-1">
-					<p className="flex items-center gap-2 truncate font-medium">
-						{row.customerName} <ModePill row={row} />
+					<p className="flex min-w-0 items-center gap-2 font-medium">
+						<span className="truncate">{row.customerName}</span>
+						<span className="shrink-0">
+							<ModePill row={row} />
+						</span>
 					</p>
 					<p className="truncate text-xs text-muted-foreground">
 						{row.customerPhone ?? "WhatsApp"}
 					</p>
 				</div>
-				<div className="flex items-center gap-2">
-					<div className="flex rounded-lg border p-0.5 xl:hidden">
+				<div className="flex shrink-0 items-center gap-2">
+					<div
+						role="tablist"
+						aria-label="Show"
+						className="flex rounded-lg border p-0.5 @4xl:hidden"
+					>
 						{(["chat", "request"] as const).map((v) => (
 							<button
 								key={v}
 								type="button"
+								role="tab"
+								aria-selected={view === v}
 								onClick={() => setView(v)}
 								className={cn(
 									"rounded-md px-2.5 py-1 text-xs capitalize",
@@ -482,17 +497,23 @@ function Conversation({ row, onBack }: { row: InboxRow; onBack: () => void }) {
 							size="sm"
 							variant="outline"
 							disabled={takeover.isPending}
+							aria-label="Hand back to AI"
+							title="Hand back to AI"
 							onClick={() => toggle(false)}
 						>
-							<Bot className="size-4" /> Hand back to AI
+							<Bot className="size-4" />
+							<span className="hidden @lg:inline">Hand back to AI</span>
 						</Button>
 					) : (
 						<Button
 							size="sm"
 							disabled={takeover.isPending}
+							aria-label="Take over"
+							title="Take over: pause the AI and reply yourself"
 							onClick={() => toggle(true)}
 						>
-							<Hand className="size-4" /> Take over
+							<Hand className="size-4" />
+							<span className="hidden @lg:inline">Take over</span>
 						</Button>
 					)}
 				</div>
@@ -502,7 +523,7 @@ function Conversation({ row, onBack }: { row: InboxRow; onBack: () => void }) {
 				{chat}
 				<aside
 					className={cn(
-						"w-full shrink-0 overflow-y-auto border-l bg-card xl:block xl:w-[480px]",
+						"w-full min-w-0 shrink-0 overflow-y-auto bg-card @4xl:block @4xl:w-[400px] @4xl:border-l @6xl:w-[480px]",
 						view === "chat" && "hidden",
 					)}
 				>

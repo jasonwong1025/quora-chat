@@ -19,6 +19,7 @@ import { Route as OrbyteBusinessIdIndexRouteImport } from './routes/orbyte.$busi
 import { Route as OrbyteBusinessIdConnectRouteImport } from './routes/orbyte.$businessId.connect'
 import { Route as OrbyteBusinessIdEsignRouteImport } from './routes/orbyte.$businessId.esign'
 import { Route as OrbyteBusinessIdInboxRouteImport } from './routes/orbyte.$businessId.inbox'
+import { Route as OrbyteBusinessIdKnowledgeRouteImport } from './routes/orbyte.$businessId.knowledge'
 import { Route as OrbyteBusinessIdPeopleRouteImport } from './routes/orbyte.$businessId.people'
 import { Route as OrbyteBusinessIdProductsRouteImport } from './routes/orbyte.$businessId.products'
 import { Route as OrbyteBusinessIdQuotesRouteImport } from './routes/orbyte.$businessId.quotes'
@@ -75,6 +76,12 @@ const OrbyteBusinessIdInboxRoute = OrbyteBusinessIdInboxRouteImport.update({
   path: '/inbox',
   getParentRoute: () => OrbyteBusinessIdRoute,
 } as any)
+const OrbyteBusinessIdKnowledgeRoute =
+  OrbyteBusinessIdKnowledgeRouteImport.update({
+    id: '/knowledge',
+    path: '/knowledge',
+    getParentRoute: () => OrbyteBusinessIdRoute,
+  } as any)
 const OrbyteBusinessIdPeopleRoute = OrbyteBusinessIdPeopleRouteImport.update({
   id: '/people',
   path: '/people',
@@ -114,6 +121,7 @@ export interface FileRoutesByFullPath {
   '/orbyte/$businessId/connect': typeof OrbyteBusinessIdConnectRoute
   '/orbyte/$businessId/esign': typeof OrbyteBusinessIdEsignRoute
   '/orbyte/$businessId/inbox': typeof OrbyteBusinessIdInboxRoute
+  '/orbyte/$businessId/knowledge': typeof OrbyteBusinessIdKnowledgeRoute
   '/orbyte/$businessId/people': typeof OrbyteBusinessIdPeopleRoute
   '/orbyte/$businessId/products': typeof OrbyteBusinessIdProductsRoute
   '/orbyte/$businessId/quotes': typeof OrbyteBusinessIdQuotesRoute
@@ -130,6 +138,7 @@ export interface FileRoutesByTo {
   '/orbyte/$businessId/connect': typeof OrbyteBusinessIdConnectRoute
   '/orbyte/$businessId/esign': typeof OrbyteBusinessIdEsignRoute
   '/orbyte/$businessId/inbox': typeof OrbyteBusinessIdInboxRoute
+  '/orbyte/$businessId/knowledge': typeof OrbyteBusinessIdKnowledgeRoute
   '/orbyte/$businessId/people': typeof OrbyteBusinessIdPeopleRoute
   '/orbyte/$businessId/products': typeof OrbyteBusinessIdProductsRoute
   '/orbyte/$businessId/quotes': typeof OrbyteBusinessIdQuotesRoute
@@ -148,6 +157,7 @@ export interface FileRoutesById {
   '/orbyte/$businessId/connect': typeof OrbyteBusinessIdConnectRoute
   '/orbyte/$businessId/esign': typeof OrbyteBusinessIdEsignRoute
   '/orbyte/$businessId/inbox': typeof OrbyteBusinessIdInboxRoute
+  '/orbyte/$businessId/knowledge': typeof OrbyteBusinessIdKnowledgeRoute
   '/orbyte/$businessId/people': typeof OrbyteBusinessIdPeopleRoute
   '/orbyte/$businessId/products': typeof OrbyteBusinessIdProductsRoute
   '/orbyte/$businessId/quotes': typeof OrbyteBusinessIdQuotesRoute
@@ -167,6 +177,7 @@ export interface FileRouteTypes {
     | '/orbyte/$businessId/connect'
     | '/orbyte/$businessId/esign'
     | '/orbyte/$businessId/inbox'
+    | '/orbyte/$businessId/knowledge'
     | '/orbyte/$businessId/people'
     | '/orbyte/$businessId/products'
     | '/orbyte/$businessId/quotes'
@@ -183,6 +194,7 @@ export interface FileRouteTypes {
     | '/orbyte/$businessId/connect'
     | '/orbyte/$businessId/esign'
     | '/orbyte/$businessId/inbox'
+    | '/orbyte/$businessId/knowledge'
     | '/orbyte/$businessId/people'
     | '/orbyte/$businessId/products'
     | '/orbyte/$businessId/quotes'
@@ -200,6 +212,7 @@ export interface FileRouteTypes {
     | '/orbyte/$businessId/connect'
     | '/orbyte/$businessId/esign'
     | '/orbyte/$businessId/inbox'
+    | '/orbyte/$businessId/knowledge'
     | '/orbyte/$businessId/people'
     | '/orbyte/$businessId/products'
     | '/orbyte/$businessId/quotes'
@@ -289,6 +302,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof OrbyteBusinessIdInboxRouteImport
       parentRoute: typeof OrbyteBusinessIdRoute
     }
+    '/orbyte/$businessId/knowledge': {
+      id: '/orbyte/$businessId/knowledge'
+      path: '/knowledge'
+      fullPath: '/orbyte/$businessId/knowledge'
+      preLoaderRoute: typeof OrbyteBusinessIdKnowledgeRouteImport
+      parentRoute: typeof OrbyteBusinessIdRoute
+    }
     '/orbyte/$businessId/people': {
       id: '/orbyte/$businessId/people'
       path: '/people'
@@ -331,6 +351,7 @@ interface OrbyteBusinessIdRouteChildren {
   OrbyteBusinessIdConnectRoute: typeof OrbyteBusinessIdConnectRoute
   OrbyteBusinessIdEsignRoute: typeof OrbyteBusinessIdEsignRoute
   OrbyteBusinessIdInboxRoute: typeof OrbyteBusinessIdInboxRoute
+  OrbyteBusinessIdKnowledgeRoute: typeof OrbyteBusinessIdKnowledgeRoute
   OrbyteBusinessIdPeopleRoute: typeof OrbyteBusinessIdPeopleRoute
   OrbyteBusinessIdProductsRoute: typeof OrbyteBusinessIdProductsRoute
   OrbyteBusinessIdQuotesRoute: typeof OrbyteBusinessIdQuotesRoute
@@ -343,6 +364,7 @@ const OrbyteBusinessIdRouteChildren: OrbyteBusinessIdRouteChildren = {
   OrbyteBusinessIdConnectRoute: OrbyteBusinessIdConnectRoute,
   OrbyteBusinessIdEsignRoute: OrbyteBusinessIdEsignRoute,
   OrbyteBusinessIdInboxRoute: OrbyteBusinessIdInboxRoute,
+  OrbyteBusinessIdKnowledgeRoute: OrbyteBusinessIdKnowledgeRoute,
   OrbyteBusinessIdPeopleRoute: OrbyteBusinessIdPeopleRoute,
   OrbyteBusinessIdProductsRoute: OrbyteBusinessIdProductsRoute,
   OrbyteBusinessIdQuotesRoute: OrbyteBusinessIdQuotesRoute,

@@ -28,6 +28,12 @@ import {
 	updateJob,
 	updateTask,
 } from "#/server/jobs";
+import {
+	deleteKnowledgeDoc,
+	findKnowledge,
+	loadKnowledge,
+	saveKnowledgeDoc,
+} from "#/server/knowledge";
 import { emitOrbyteEvent } from "#/server/orbyte";
 import {
 	askNow,
@@ -1532,6 +1538,40 @@ const updateFollowUpRules = os
 		return { ok: true };
 	});
 
+// --- Company knowledge base --------------------------------------------------------------
+
+const listKnowledge = os
+	.input(businessInput)
+	.handler(({ input }) => loadKnowledge(input.businessId, "team"));
+
+const saveKnowledge = os
+	.input(
+		businessInput.extend({
+			staffId: z.string(),
+			id: z.string().optional(),
+			title: z.string().trim().min(1).max(160),
+			category: z.string().trim().max(60),
+			visibility: z.enum(["internal", "public"]),
+			body: z.string().trim().min(1).max(20_000),
+		}),
+	)
+	.handler(({ input }) => saveKnowledgeDoc(input).catch(fail));
+
+const deleteKnowledge = os
+	.input(businessInput.extend({ staffId: z.string(), id: z.string() }))
+	.handler(({ input }) => deleteKnowledgeDoc(input).catch(fail));
+
+/** What each AI would be given for a question: shows the internal/public boundary. */
+const previewKnowledge = os
+	.input(businessInput.extend({ query: z.string().trim().min(1).max(500) }))
+	.handler(async ({ input }) => {
+		const [team, customer] = await Promise.all([
+			findKnowledge(input.businessId, "team", input.query),
+			findKnowledge(input.businessId, "customer", input.query),
+		]);
+		return { team, customer };
+	});
+
 /** Demo only: pretend days have passed for one business. */
 const demoFastForward = os
 	.input(businessInput.extend({ days: z.number().int().min(1).max(30) }))
@@ -1597,5 +1637,11 @@ export default {
 	},
 	notifications: { list: listNotifications, read: readNotifications },
 	categories: { setPic: setCategoryPic },
+	knowledge: {
+		list: listKnowledge,
+		save: saveKnowledge,
+		delete: deleteKnowledge,
+		preview: previewKnowledge,
+	},
 	activity: { list: listActivity },
 };

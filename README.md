@@ -14,6 +14,8 @@ Customers send messages in English, Bahasa Melayu, Chinese, or a mix. Like a goo
 8. **Handover after signing.** Quora Chat creates the Client and a job in **Orbyte Work**, named by what was bought (Delivery order / Job order / Project), assigns the category's default **PIC**, and the AI writes a handover pack: briefing, scope, key requirements, what we promised in chat, watch-outs and starting tasks. The PIC is notified (simulated Orbyte app + email). Completing a delivery order hands over its reserved stock.
 9. **A team chat per job; the team never talks to the customer.** Each job has an internal group with the PIC, any other workers the PIC or an approver adds, and the AI. The customer is never in it. Teammates talk to each other and tag each other (`@Name`, which sends a notification). The AI only answers when tagged **`@AI`**: it answers from the signed brief, quote, agreement conversation and file references, shows where it found each answer, and suggests actions (add task, flag a blocker, ask the customer). It opens the group with the handover briefing. "Ask the customer" drafts a friendly WhatsApp message that **sales approve** in the Quotation inbox; each step shows in the group, and the customer's reply comes back to the group with the team notified.
 
+**Company knowledge base.** Each business keeps its SOPs, policies and specs in **Knowledge**. Documents are **Internal** (the team AI only) or **Public** (the WhatsApp assistant may answer customers from them). Code decides which documents each AI receives, so a customer can't talk the WhatsApp assistant into revealing internal content. The team AI cites the document it used, and the handover pack follows the matching SOPs. The "Who can read what" panel shows what each AI would be given for a question.
+
 Throughout, staff can see the live **requirement brief** (answers, their source, what's missing), fill in answers or, as an approver, waive them with a reason, add their own question for the AI to ask, press **Ask now** or **Draft now**, read the AI's reasoning ("AI thinking"), or **take over** the chat. The code decides what to ask and when to draft; the AI reads answers and words the messages. Every step is recorded as a **simulated Orbyte activity event**.
 
 Products also carry a SKU, a type (stock item or service) and stock levels: a quote that needs more than is available is flagged, and signing reserves the stock.
@@ -52,9 +54,7 @@ pnpm install
 cp .env.example .env      # fill in DATABASE_URL and the AI keys
 pnpm db:push              # create tables
 pnpm db:seed              # load the 5 demo businesses (new disposable DB only)
-pnpm dev                  # http://localhost:3000
-# In another terminal, with the same DATABASE_URL:
-pnpm worker               # durable signing → handover tasks
+pnpm dev                  # http://localhost:3000, plus the signing → handover worker
 ```
 
 Set `OPENROUTER_API_KEY` (from https://openrouter.ai/keys). `AI_MODEL` takes an OpenRouter model id and defaults to `openai/gpt-5-mini`; it must support structured outputs.
@@ -84,6 +84,9 @@ src/
     followups.ts        reminders for unsigned quotes, reply routing, extension, lost, demo clock
     jobs.ts             handover after signing: client, job, PIC, team chat (@AI), relayed questions, notifications
   lib/mentions.ts       @AI / @Name tags in the team chat (shared by server and UI)
+  lib/knowledge.ts      knowledge-base search (keyword ranking, also handles Chinese)
+  server/knowledge.ts   which AI may read which documents; editing (approvers)
+  data/demo-knowledge.ts synthetic SOPs, policies and FAQs per business
     orbyte.ts           simulated Orbyte activity events
     hono.ts             /api app: oRPC handler, quote PDF, product images, health
     quote-pdf.tsx       PDF layout
@@ -102,11 +105,11 @@ src/
 
 | Script | What it does |
 | --- | --- |
-| `pnpm dev` | Dev server on port 3000 |
+| `pnpm dev` | Dev server on port 3000 and the background worker (`pnpm dev:web` for the web server alone) |
 | `pnpm build` / `pnpm start` | Production build and run |
 | `pnpm typecheck` | TypeScript check |
 | `pnpm check` | Biome lint and format check |
-| `pnpm worker` | Run the required background handover worker |
+| `pnpm worker` | Run only the background handover worker |
 | `pnpm start:with-worker` | Run production web and worker on one always-on host |
 | `pnpm test` / `pnpm test:db` | Unit checks / disposable PostgreSQL integration tests |
 | `pnpm test:ui` | Disposable database and browser signing/PDF checks |

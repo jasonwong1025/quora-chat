@@ -626,10 +626,45 @@ export const jobTasks = pgTable("job_tasks", {
 
 /** Where the PIC's chatbot found something. */
 export type BotSource = {
-	kind: "chat" | "brief" | "quote" | "handover" | "file" | "relay" | "catalog";
+	kind:
+		| "chat"
+		| "brief"
+		| "quote"
+		| "handover"
+		| "file"
+		| "relay"
+		| "catalog"
+		| "knowledge";
 	label: string;
-	ref?: string; // message id for "chat"/"file"
+	ref?: string; // message id for "chat"/"file"; doc id for "knowledge"
 };
+
+// --- Company knowledge base ------------------------------------------------------------
+
+/**
+ * Internal docs are read by the team AI only. Public docs may also be used by the
+ * customer-facing AI. Code enforces this when loading; the prompt is not the guard.
+ */
+export const knowledgeVisibility = pgEnum("knowledge_visibility", [
+	"internal",
+	"public",
+]);
+
+export const knowledgeDocs = pgTable("knowledge_docs", {
+	id: id(),
+	businessId: text("business_id")
+		.notNull()
+		.references(() => businesses.id, { onDelete: "cascade" }),
+	title: text("title").notNull(),
+	category: text("category").notNull(), // e.g. "SOP", "Policy", "FAQ"
+	visibility: knowledgeVisibility("visibility").default("internal").notNull(),
+	body: text("body").notNull(),
+	updatedBy: text("updated_by"),
+	createdAt: createdAt(),
+	updatedAt: timestamp("updated_at", { withTimezone: true })
+		.defaultNow()
+		.notNull(),
+});
 
 /** Something the chatbot suggests; the PIC confirms with a click. */
 export type BotAction =

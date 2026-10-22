@@ -18,6 +18,7 @@ import {
 	readRelayAnswer,
 	writeHandover,
 } from "./ai";
+import { findKnowledge } from "./knowledge";
 import { emitOrbyteEvent } from "./orbyte";
 import { deliveryBaseline } from "./revisions";
 import { enqueueTask, finishTask, type TaskClaim } from "./tasks";
@@ -399,7 +400,13 @@ export async function buildHandover(
 		await getDb().transaction((db) => finishTask(db, claim));
 		return;
 	}
-	const draft = await writeHandover(context);
+	const knowledge = await findKnowledge(
+		job.businessId,
+		"team",
+		[job.title, ...context.quote, ...context.catalog].join(" "),
+		3,
+	);
+	const draft = await writeHandover({ ...context, knowledge });
 	const { title: proposedTitle, tasks, ...handover } = draft;
 	const title = proposedTitle || job.title;
 	return getDb().transaction(async (db) => {
@@ -1006,6 +1013,13 @@ async function assistantReply(input: {
 			.where(eq(schema.relays.jobId, job.id))
 			.orderBy(asc(schema.relays.createdAt)),
 	]);
+	const knowledge = (
+		await findKnowledge(
+			job.businessId,
+			"team",
+			`${input.question} ${job.title}`,
+		)
+	).map((p, i) => ({ ...p, ref: `k${i + 1}` }));
 	const label = (name: string | null, id: string | null) =>
 		`${name ?? "Staff"}${id && id === job.picId ? " (PIC)" : ""}`;
 	const reply = await answerJobQuestion({
@@ -1030,6 +1044,7 @@ async function assistantReply(input: {
 		askerName: label(input.asker.name, input.asker.id),
 		picName: input.members.find((m) => m.id === job.picId)?.name ?? null,
 		team: input.members.map((m) => label(m.name, m.id)),
+		knowledge,
 	}).catch((err) => {
 		console.error("[job assistant]", err);
 		return {
@@ -1043,11 +1058,19 @@ async function assistantReply(input: {
 	// Map "m12" style references back to message ids so the UI can jump to them.
 	const idOfRef = new Map([...refOf.entries()].map(([id, ref]) => [ref, id]));
 	const taskIds = new Set(tasks.map((t) => t.id));
-	const sources: BotSource[] = reply.sources.map((s) => ({
-		kind: s.kind,
-		label: s.label,
-		...(s.ref && idOfRef.has(s.ref) ? { ref: idOfRef.get(s.ref) } : {}),
-	}));
+	const docOfRef = new Map(knowledge.map((k) => [k.ref, k]));
+	const sources: BotSource[] = reply.sources.map((s) => {
+		const doc =
+			s.kind === "knowledge" && s.ref ? docOfRef.get(s.ref) : undefined;
+		if (doc) return { kind: "knowledge", label: doc.title, ref: doc.docId };
+		return {
+			kind: s.kind,
+			label: s.label,
+			...(s.kind !== "knowledge" && s.ref && idOfRef.has(s.ref)
+				? { ref: idOfRef.get(s.ref) }
+				: {}),
+		};
+	});
 	const actions: BotAction[] = reply.actions.slice(0, 3).map((a) =>
 		a.kind === "add_task"
 			? { kind: "add_task", title: a.text }

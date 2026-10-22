@@ -4,6 +4,7 @@ import {
 	AlertTriangle,
 	ArrowLeft,
 	AtSign,
+	BookOpen,
 	Bot,
 	CheckCircle2,
 	Circle,
@@ -1527,6 +1528,7 @@ const sourceIcon: Record<BotSource["kind"], typeof Quote> = {
 	handover: Sparkles,
 	relay: MessageCircleQuestion,
 	catalog: UserRound,
+	knowledge: BookOpen,
 };
 
 function Sources({
@@ -1536,10 +1538,25 @@ function Sources({
 	sources: BotSource[];
 	onShowMessage: (id: string) => void;
 }) {
+	const { business } = useWorkspace();
 	return (
 		<div className="flex flex-wrap gap-1">
 			{sources.map((s, i) => {
 				const Icon = sourceIcon[s.kind];
+				// A knowledge-base source opens its document; others jump to the chat.
+				if (s.kind === "knowledge")
+					return (
+						<Link
+							key={`${s.kind}-${s.label}-${i}`}
+							to="/orbyte/$businessId/knowledge"
+							params={{ businessId: business.id }}
+							search={{ d: s.ref }}
+							className="inline-flex items-center gap-1 rounded-md bg-card px-1.5 py-0.5 text-[10px] text-muted-foreground ring-1 ring-border hover:text-primary hover:ring-primary/40"
+							title="Open in the knowledge base"
+						>
+							<Icon className="size-3" /> {s.label}
+						</Link>
+					);
 				const clickable = Boolean(s.ref);
 				return (
 					<button

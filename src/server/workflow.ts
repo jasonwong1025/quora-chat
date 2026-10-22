@@ -54,6 +54,7 @@ import {
 	todayMY,
 } from "./followups";
 import { matchRelayAnswer } from "./jobs";
+import { findKnowledge } from "./knowledge";
 import { emitOrbyteEvent } from "./orbyte";
 import { formatMYR, priceBrief, totals } from "./pricing";
 import { createRequest, saveRequest, snapshotBrief } from "./requirements";
@@ -896,6 +897,7 @@ async function advanceRequest(a: Advance): Promise<{
 			language: brief.language,
 			plan,
 			customerQuestion: a.customerQuestion,
+			knowledge: await publicFaq(business.id, a.customerQuestion),
 			notOffered,
 			history: a.history,
 			firstReply: !a.history.some((m) => m.sender !== "customer"),
@@ -909,6 +911,16 @@ function fallbackReply(language: Language) {
 		: language === "zh"
 			? "好的收到，我们的同事稍后回复您。"
 			: "Ok noted, our team will get back to you shortly.";
+}
+
+/**
+ * Published FAQ passages for a customer's question. Only "public" docs: internal
+ * knowledge is never loaded for the customer-facing AI, whatever the message says.
+ */
+function publicFaq(businessId: string, question: string | null) {
+	return question
+		? findKnowledge(businessId, "customer", question, 3).catch(() => [])
+		: Promise.resolve([]);
 }
 
 // --- Customer message ---------------------------------------------------------------------
@@ -1224,6 +1236,7 @@ export async function* handleCustomerMessage(input: {
 							"Answer their question about this quotation using the agreed requirements. Do not change the scope, price or promise new work.",
 					},
 					customerQuestion: reading.customerQuestion,
+					knowledge: await publicFaq(businessId, reading.customerQuestion),
 					notOffered: [],
 					history,
 					firstReply: false,
@@ -1323,6 +1336,7 @@ export async function* handleCustomerMessage(input: {
 							),
 						},
 				customerQuestion: reading.customerQuestion,
+				knowledge: await publicFaq(businessId, reading.customerQuestion),
 				notOffered: [],
 				history,
 				firstReply: !history.some((m) => m.sender !== "customer"),

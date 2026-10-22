@@ -7,6 +7,7 @@ import {
 	useRouter,
 } from "@tanstack/react-router";
 import {
+	BookOpen,
 	FileText,
 	LayoutDashboard,
 	ListChecks,
@@ -65,6 +66,7 @@ type NavItem = {
 		| "/orbyte/$businessId/work"
 		| "/orbyte/$businessId/esign"
 		| "/orbyte/$businessId/connect"
+		| "/orbyte/$businessId/knowledge"
 		| "/orbyte/$businessId/products"
 		| "/orbyte/$businessId/inbox"
 		| "/orbyte/$businessId/quotes";
@@ -132,6 +134,11 @@ function Shell() {
 				},
 				{ to: "/orbyte/$businessId/esign", label: "eSign", icon: PenLine },
 				{ to: "/orbyte/$businessId/connect", label: "Connect", icon: Plug },
+				{
+					to: "/orbyte/$businessId/knowledge",
+					label: "Knowledge",
+					icon: BookOpen,
+				},
 			],
 		},
 		{
@@ -167,7 +174,8 @@ function Shell() {
 	};
 
 	const sidebar = (
-		<nav className="flex h-full flex-col gap-1 bg-[var(--orb-navy)] p-3 text-white">
+		// On short screens the whole sidebar scrolls, so no menu item hides behind the demo clock.
+		<nav className="flex h-full flex-col gap-1 overflow-y-auto bg-[var(--orb-navy)] p-3 text-white">
 			<div className="flex items-center gap-2 px-2 py-2">
 				<Link to="/" className="flex items-center gap-2">
 					<span className="flex size-8 items-center justify-center rounded-lg bg-white">
@@ -178,7 +186,7 @@ function Shell() {
 				<NotificationBell />
 			</div>
 			<BusinessSwitcher />
-			<div className="mt-2 min-h-0 flex-1 space-y-4 overflow-y-auto">
+			<div className="mt-2 flex-1 space-y-4 pb-2">
 				{groups.map((g) => (
 					<div key={g.title ?? "top"}>
 						{g.title && (
