@@ -331,7 +331,7 @@ const decide = os
 			staffId: z.string(),
 			decision: z.enum(["approved", "rejected"]),
 			reviewToken: z.string(),
-			reason: z.string().optional(),
+			reason: z.string().trim().max(500).optional(),
 		}),
 	)
 	.handler(({ input }) => decideQuote(input).catch(fail));

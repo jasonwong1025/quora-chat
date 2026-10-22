@@ -14,11 +14,11 @@ import { orpc } from "#/orpc/client";
 type Quote = NonNullable<RequestRow["quote"]>;
 
 const quoteStatusLabel: Record<Quote["status"], string> = {
-	draft: "Draft",
-	approved: "Approved · awaiting signature",
+	draft: "Draft · pending approval",
+	approved: "Sent · awaiting signature",
 	rejected: "Rejected",
 	accepted: "Signed by customer",
-	superseded: "Replaced by a newer revision",
+	superseded: "Superseded by a newer revision",
 	lost: "Lost",
 };
 
@@ -34,6 +34,11 @@ export function QuoteEditor(props: {
 	const [lines, setLines] = useState<LineItem[]>(quote.lineItems);
 	const [notes, setNotes] = useState(quote.notes ?? "");
 	const [dirty, setDirty] = useState(false);
+	// What staff are typing in each price box, so it isn't reformatted mid-keystroke.
+	const [priceText, setPriceText] = useState<Record<number, string>>({});
+	const [rejecting, setRejecting] = useState(false);
+	const [reason, setReason] = useState("");
+	const decidedBy = business.staff.find((s) => s.id === quote.decidedBy)?.name;
 
 	const invalidate = () =>
 		queryClient.invalidateQueries({ queryKey: orpc.key() });
@@ -82,6 +87,8 @@ export function QuoteEditor(props: {
 	}
 
 	async function act(decision: "approved" | "rejected") {
+		if (decision === "rejected" && !reason.trim())
+			return toast.error("Give a reason for rejecting");
 		if (!actingAs) return toast.error("Choose who you are acting as first");
 		try {
 			const reviewed = dirty ? await save() : quote;
@@ -91,6 +98,7 @@ export function QuoteEditor(props: {
 				staffId: actingAs.id,
 				decision,
 				reviewToken: quoteReviewToken(reviewed),
+				...(decision === "rejected" ? { reason: reason.trim() } : {}),
 			});
 			toast.success(
 				decision === "approved"
@@ -113,7 +121,8 @@ export function QuoteEditor(props: {
 				<p className="text-sm font-semibold">
 					{quote.number}{" "}
 					<span className="font-normal text-muted-foreground">
-						· {editable ? "Draft" : quoteStatusLabel[quote.status]}
+						·{" "}
+						{editable ? quoteStatusLabel.draft : quoteStatusLabel[quote.status]}
 					</span>
 				</p>
 				<a
@@ -169,11 +178,14 @@ export function QuoteEditor(props: {
 										type="number"
 										min={0}
 										step="0.01"
-										value={(l.unitPriceSen / 100).toFixed(2)}
-										onChange={(e) =>
-											patch(i, {
-												unitPriceSen: parseMYR(e.target.value) ?? 0,
-											})
+										value={priceText[i] ?? (l.unitPriceSen / 100).toFixed(2)}
+										onChange={(e) => {
+											const text = e.target.value;
+											setPriceText((t) => ({ ...t, [i]: text }));
+											patch(i, { unitPriceSen: parseMYR(text) ?? 0 });
+										}}
+										onBlur={() =>
+											setPriceText(({ [i]: _done, ...rest }) => rest)
 										}
 										className={`h-8 text-right text-sm text-foreground ${l.unitPriceSen === 0 ? "border-status-review" : ""}`}
 									/>
@@ -282,6 +294,14 @@ export function QuoteEditor(props: {
 				<Row label="Total" value={formatMYR(subtotal + sst)} bold />
 			</div>
 
+			{quote.status === "rejected" && (
+				<p className="border-t px-3 py-2 text-sm">
+					<span className="font-medium">
+						Rejected{decidedBy ? ` by ${decidedBy}` : ""}:
+					</span>{" "}
+					{quote.decisionReason ?? "no reason recorded"}
+				</p>
+			)}
 			{editable && (
 				<div className="space-y-2 border-t p-3">
 					<Textarea
@@ -309,8 +329,9 @@ export function QuoteEditor(props: {
 						</Button>
 						<Button
 							variant="outline"
-							onClick={() => act("rejected")}
+							onClick={() => setRejecting((r) => !r)}
 							disabled={decide.isPending || !actingAs?.canApprove}
+							aria-expanded={rejecting}
 						>
 							<X className="size-4" /> Reject
 						</Button>
@@ -322,6 +343,32 @@ export function QuoteEditor(props: {
 							>
 								Save draft
 							</Button>
+						)}
+						{rejecting && (
+							<form
+								className="flex w-full gap-2"
+								onSubmit={(e) => {
+									e.preventDefault();
+									act("rejected");
+								}}
+							>
+								<Input
+									autoFocus
+									value={reason}
+									onChange={(e) => setReason(e.target.value)}
+									maxLength={500}
+									placeholder="Why? e.g. price needs a site visit first"
+									aria-label="Reason for rejecting"
+									className="h-9"
+								/>
+								<Button
+									type="submit"
+									variant="destructive"
+									disabled={!reason.trim() || decide.isPending}
+								>
+									Reject quote
+								</Button>
+							</form>
 						)}
 						{actingAs && !actingAs.canApprove && (
 							<p className="text-xs text-muted-foreground">

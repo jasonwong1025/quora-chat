@@ -1780,6 +1780,9 @@ export async function decideQuote(input: {
 			.for("update");
 		if (quote.status !== "draft")
 			throw new Error("Quote has already been decided");
+		const reason = input.reason?.trim() || null;
+		if (input.decision === "rejected" && !reason)
+			throw new Error("Give a reason for rejecting, so it stays traceable");
 		if (
 			input.decision === "rejected" &&
 			quote.requirementVersion !== request.briefVersion
@@ -1875,7 +1878,12 @@ export async function decideQuote(input: {
 		const now = new Date();
 		const [row] = await db
 			.update(schema.quotes)
-			.set({ status: input.decision, decidedBy: member.id, decidedAt: now })
+			.set({
+				status: input.decision,
+				decidedBy: member.id,
+				decidedAt: now,
+				decisionReason: input.decision === "rejected" ? reason : null,
+			})
 			.where(eq(schema.quotes.id, quote.id))
 			.returning();
 		let brief: Brief = { ...request.brief, revisionOf: null };

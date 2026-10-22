@@ -61,7 +61,7 @@ with sync_playwright() as p:
     assert "办公室" in text, text
     subprocess.run(["pdftoppm", "-scale-to", "1400", "-singlefile", "-png", str(pdf), str(artifacts / "agreement-pdf")], check=True)
     page.get_by_role("button", name="Approve & send").click()
-    expect(page.get_by_text("Approved · awaiting signature", exact=False)).to_be_visible()
+    expect(page.get_by_text("· Sent · awaiting signature", exact=True)).to_be_visible()
     pdf_link = page.get_by_role("link", name="PDF", exact=True).first.get_attribute("href")
     quote_id = pdf_link.split("/")[3]
     page.goto(base + "/sign/" + quote_id)

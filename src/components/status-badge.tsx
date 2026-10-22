@@ -14,7 +14,7 @@ const styles = {
 		className: "bg-status-review/15 text-status-review",
 	},
 	draft_ready: {
-		label: "Draft ready",
+		label: "Pending approval",
 		className: "bg-status-draft/15 text-status-draft",
 	},
 	approved: {
@@ -26,7 +26,7 @@ const styles = {
 		className: "bg-status-rejected/15 text-status-rejected",
 	},
 	sent: {
-		label: "Awaiting signature",
+		label: "Sent · awaiting signature",
 		className: "bg-status-draft/15 text-status-draft",
 	},
 	accepted: {
@@ -34,7 +34,7 @@ const styles = {
 		className: "bg-status-approved/15 text-status-approved",
 	},
 	superseded: {
-		label: "Replaced",
+		label: "Superseded",
 		className: "bg-muted text-muted-foreground",
 	},
 	lost: {

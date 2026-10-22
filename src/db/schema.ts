@@ -371,6 +371,8 @@ export const quotes = pgTable("quotes", {
 	validUntil: timestamp("valid_until", { withTimezone: true }).notNull(),
 	decidedBy: text("decided_by").references(() => staff.id),
 	decidedAt: timestamp("decided_at", { withTimezone: true }),
+	/** Why it was rejected (required when rejecting). */
+	decisionReason: text("decision_reason"),
 	// eSign: the customer reviews and signs the approved quote.
 	viewedAt: timestamp("viewed_at", { withTimezone: true }),
 	signedAt: timestamp("signed_at", { withTimezone: true }),

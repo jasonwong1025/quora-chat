@@ -1055,6 +1055,7 @@ test("rejecting a revision of an unsigned quote keeps it signable and numbers th
 			quoteId: quote.id,
 			staffId: s.staff.id,
 			decision: "rejected",
+			reason: "Customer is still deciding the scope",
 			reviewToken: quoteReviewToken(quote),
 		});
 	}
