@@ -11,6 +11,7 @@ import {
 	Users,
 } from "lucide-react";
 import { ActivityFeed } from "#/components/activity-feed";
+import { lostLabel } from "#/components/orbyte/follow-up-panel";
 import { PageHeader, useWorkspace } from "#/components/orbyte/workspace";
 import { StatusBadge } from "#/components/status-badge";
 import { formatMYR } from "#/lib/money";
@@ -49,6 +50,15 @@ function Home() {
 	const awaitingSig = esign.data?.filter((q) => q.status === "approved") ?? [];
 	const signed = esign.data?.filter((q) => q.status === "accepted") ?? [];
 	const signedValue = signed.reduce((s, q) => s + q.totalSen, 0);
+	const lost = r.filter((x) => x.quote?.status === "lost");
+	const reasons = Object.entries(
+		lost.reduce<Record<string, number>>((acc, x) => {
+			const k = x.quote?.lostReason ?? "other";
+			acc[k] = (acc[k] ?? 0) + 1;
+			return acc;
+		}, {}),
+	).sort((a, b) => b[1] - a[1]);
+	const decided = signed.length + lost.length;
 
 	const stats = [
 		{
@@ -67,11 +77,30 @@ function Home() {
 			to: "/orbyte/$businessId/esign" as const,
 		},
 		{
-			label: "Signed value",
+			label: "Won (signed value)",
 			value: formatMYR(signedValue),
+			hint: decided
+				? `${Math.round((signed.length / decided) * 100)}% of decided quotes`
+				: undefined,
 			to: "/orbyte/$businessId/esign" as const,
 		},
-	];
+		{
+			label: "Lost",
+			value: lost.length,
+			hint: reasons.length
+				? `Top reason: ${(lostLabel as Record<string, string>)[reasons[0][0]] ?? reasons[0][0]}`
+				: undefined,
+			to: "/orbyte/$businessId/quotes" as const,
+		},
+	] as {
+		label: string;
+		value: string | number;
+		hint?: string;
+		to:
+			| "/orbyte/$businessId/inbox"
+			| "/orbyte/$businessId/quotes"
+			| "/orbyte/$businessId/esign";
+	}[];
 
 	const modules = [
 		{
@@ -84,7 +113,7 @@ function Home() {
 			to: "/orbyte/$businessId/work" as const,
 			icon: ListChecks,
 			name: "Work",
-			text: "Daily status and projects",
+			text: "Jobs handed over after signing",
 		},
 		{
 			to: "/orbyte/$businessId/esign" as const,
@@ -132,7 +161,7 @@ function Home() {
 				</p>
 			</div>
 
-			<div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+			<div className="grid grid-cols-2 gap-3 lg:grid-cols-5">
 				{stats.map((s) => (
 					<Link
 						key={s.label}
@@ -144,6 +173,11 @@ function Home() {
 						<p className="mt-1 text-2xl font-semibold tabular-nums">
 							{s.value}
 						</p>
+						{s.hint && (
+							<p className="mt-0.5 text-[11px] text-muted-foreground">
+								{s.hint}
+							</p>
+						)}
 					</Link>
 				))}
 			</div>

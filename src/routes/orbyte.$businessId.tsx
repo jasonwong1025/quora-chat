@@ -19,6 +19,7 @@ import {
 	X,
 } from "lucide-react";
 import { useState } from "react";
+import { DemoClock } from "#/components/orbyte/demo-clock";
 import { NotificationBell } from "#/components/orbyte/notification-bell";
 import { useWorkspace, WorkspaceProvider } from "#/components/orbyte/workspace";
 import {
@@ -219,6 +220,7 @@ function Shell() {
 					</div>
 				))}
 			</div>
+			<DemoClock />
 			<SignedInAs />
 		</nav>
 	);
@@ -278,7 +280,12 @@ function BusinessSwitcher() {
 					</span>
 				</span>
 			</SelectTrigger>
-			<SelectContent>
+			<SelectContent
+				position="popper"
+				side="bottom"
+				align="start"
+				className="w-72 min-w-[var(--radix-select-trigger-width)]"
+			>
 				{businesses.data?.map((b) => (
 					<SelectItem key={b.id} value={b.id}>
 						{b.name}
@@ -312,7 +319,12 @@ function SignedInAs() {
 					</span>
 				</span>
 			</SelectTrigger>
-			<SelectContent>
+			<SelectContent
+				position="popper"
+				side="top"
+				align="start"
+				className="max-h-[60vh] w-72 min-w-[var(--radix-select-trigger-width)]"
+			>
 				{business.staff.map((s) => (
 					<SelectItem key={s.id} value={s.id}>
 						{s.name}

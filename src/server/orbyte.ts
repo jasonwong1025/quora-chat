@@ -42,6 +42,12 @@ export type OrbyteEventType =
 	| "relay.sent"
 	| "relay.rejected"
 	| "relay.answered"
+	| "followup.scheduled"
+	| "followup.sent"
+	| "followup.paused"
+	| "followup.resumed"
+	| "quote.extended"
+	| "quote.lost"
 	| "stock.reserved"
 	| "stock.adjusted";
 

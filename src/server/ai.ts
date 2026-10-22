@@ -126,6 +126,7 @@ export type ReadInput = {
 	sentQuote: { number: string; lines: string[] } | null;
 	history: ChatTurn[];
 	latestHasAttachment: boolean;
+	today: string; // YYYY-MM-DD, Malaysia time
 };
 
 const readSchema = z.object({
@@ -152,6 +153,20 @@ const readSchema = z.object({
 	confirmation: z.enum(["confirmed", "changed", "none"]),
 	wantsChange: z.boolean(),
 	customerQuestion: z.string().nullable(),
+	quoteResponse: z.object({
+		intent: z.enum([
+			"none",
+			"later",
+			"price_concern",
+			"not_interested",
+			"question",
+		]),
+		resumeOn: z.string().nullable(),
+		lostReason: z
+			.enum(["price", "timing", "competitor", "not_needed", "other"])
+			.nullable(),
+		note: z.string().nullable(),
+	}),
 	reasoning: z.array(z.string()),
 });
 
@@ -182,6 +197,18 @@ const readJsonSchema = obj({
 	confirmation: { type: "string", enum: ["confirmed", "changed", "none"] },
 	wantsChange: { type: "boolean" },
 	customerQuestion: strOrNull,
+	quoteResponse: obj({
+		intent: {
+			type: "string",
+			enum: ["none", "later", "price_concern", "not_interested", "question"],
+		},
+		resumeOn: strOrNull,
+		lostReason: {
+			type: ["string", "null"],
+			enum: ["price", "timing", "competitor", "not_needed", "other", null],
+		},
+		note: strOrNull,
+	}),
 	reasoning: strList,
 });
 
@@ -213,7 +240,14 @@ Rules:
 - followUpAnswers: answers to the open follow-up questions, if the customer gave them.
 - followUp: only if an answer the customer just gave to one of the questions above is too vague or contradictory to quote on (e.g. "a few users", clashing dates): aboutKey = that question's key (or "quantity"), question = ONE short question to clear it up. Otherwise null (this is the usual case). Never ask technical or implementation questions (APIs, databases, file formats, hosting setup): our team works those out. Never use it for something a preset question already covers, or to ask for files.
 - confirmation: only at stage "confirming": "confirmed" if they agree the summary is right (ok / yes / betul / 对 / can / go ahead), "changed" if they correct or add anything. Otherwise "none".
-- wantsChange: true only if a quotation was already sent and the customer asks to change it.
+- wantsChange: true only if a quotation was already sent and the customer asks to change what's in it (quantity, specs, items, dates). Asking for a lower price or a discount is NOT a change: that's quoteResponse "price_concern". Declining is "not_interested", not a change.
+- quoteResponse: only when a quotation was already sent and is waiting for their signature, how the latest message responds to it (otherwise intent "none"):
+  - "later": they need more time / must ask their boss or partner. resumeOn = the date they'll be ready as YYYY-MM-DD (today is ${input.today}; "next week" = 7 days later, "end of month" = last day of the month), or null if they gave no time.
+  - "price_concern": too expensive, asking for a discount or a better price.
+  - "not_interested": they decided not to go ahead. lostReason = price / timing / competitor (went elsewhere) / not_needed / other.
+  - "question": a question about the quotation or the work.
+  - "none": anything else, including asking to change the quote (that's wantsChange).
+  note = a few words on their reason, or null.
 - customerQuestion: if they asked us something that is not a requirement (opening hours, location, turnaround…), the question in short English. Otherwise null.
 - language: the language of the customer's messages ("mixed" if they mix).
 - summary: one short English sentence describing the whole request.
@@ -254,6 +288,7 @@ export type ReplyPlan =
 	| { stage: "confirming"; summary: string[]; isRevision: boolean }
 	| { stage: "drafted"; customPriced: boolean; isRevision: boolean }
 	| { stage: "relay_thanks" }
+	| { stage: "note"; instruction: string }
 	| { stage: "chat" };
 
 export type ReplyInput = {
@@ -297,6 +332,8 @@ function planText(plan: ReplyPlan) {
 			return plan.customPriced
 				? "They confirmed. Our team will go through the details and send the quotation, usually within 1 working day. Thank them briefly."
 				: `They confirmed. Say we're preparing the ${plan.isRevision ? "updated " : ""}quotation and our team will send it here once checked, usually within the hour. Thank them briefly.`;
+		case "note":
+			return plan.instruction;
 		case "relay_thanks":
 			return "They just answered a question our team asked about their job. Thank them briefly and say you'll pass it to the team. Nothing else.";
 		case "chat":
@@ -682,4 +719,73 @@ export function readRelayAnswer(input: {
 		`Our team's question: ${input.question}\nMessage we sent: ${input.sentMessage}\nCustomer's reply: ${input.reply}${input.hasAttachment ? " [with a file attached]" : ""}`,
 		"minimal",
 	);
+}
+
+// --- Following up unsigned quotes ------------------------------------------------------
+
+/** Picks when to nudge a customer about an unsigned quote. Code enforces the limits. */
+export function planFollowUpTiming(input: {
+	businessName: string;
+	hoursSinceSent: number;
+	opened: boolean;
+	hoursSinceOpened: number | null;
+	remindersSent: number;
+	maxReminders: number;
+	hoursUntilExpiry: number;
+	customerDeadline: string | null;
+	recentChat: ChatTurn[];
+	now: string;
+}) {
+	return structured(
+		"follow_up_timing",
+		obj({ waitHours: { type: "number" }, reason: str }),
+		z.object({ waitHours: z.number(), reason: z.string() }),
+		`You decide when "${input.businessName}" (Malaysia) should next follow up on a quotation the customer hasn't signed. Be considerate: not pushy, not forgotten. Consider whether they opened it, how long ago, how engaged the chat was, their own deadline, and how long until the quote expires. Typical: first nudge 1-2 days after sending; sooner if they opened it and went quiet; nearer the expiry for the last one.
+Return waitHours (from now) and a one-sentence reason in plain English for the staff.`,
+		`Now: ${input.now}
+Sent ${Math.round(input.hoursSinceSent)} hours ago. ${input.opened ? `Customer opened it ${Math.round(input.hoursSinceOpened ?? 0)} hours ago.` : "Customer hasn't opened it yet."}
+Reminders sent so far: ${input.remindersSent} of max ${input.maxReminders}.
+Expires in ${Math.round(input.hoursUntilExpiry)} hours.
+Customer's own deadline: ${input.customerDeadline ?? "not stated"}.
+Recent chat:
+${transcript(input.recentChat.slice(-6))}`,
+		"low",
+	);
+}
+
+/** A short, human follow-up about an unsigned quote. Never discounts or pressure. */
+export async function writeFollowUp(input: {
+	businessName: string;
+	customerName: string;
+	language: Language;
+	quoteNumber: string;
+	what: string; // e.g. "500 A5 flyers"
+	opened: boolean;
+	reminderNumber: number;
+	final: boolean;
+	extendedUntil: string | null; // set when we just extended validity
+	recentChat: ChatTurn[];
+}) {
+	const situation = input.extendedUntil
+		? `The quotation's validity just ran out, so we've kindly extended it once, until ${input.extendedUntil}. Let them know, no pressure, and that they can still review and sign it from the quotation above.`
+		: input.final
+			? "This is the last reminder before the quotation expires. Mention it's valid for a little longer and offer help if anything is holding them back."
+			: input.opened
+				? "They opened the quotation but haven't signed. Gently check in: any questions or anything they'd like to adjust?"
+				: "They haven't opened the quotation yet. Gently remind them it's waiting in the chat for them to review and sign.";
+	const res = await getClient().chat.completions.create({
+		model: model(),
+		reasoning_effort: "minimal",
+		messages: [
+			{
+				role: "system",
+				content: `You write a WhatsApp follow-up for "${input.businessName}" (Malaysia) about quotation ${input.quoteNumber} (${input.what}) that the customer hasn't signed yet. Write in ${languageName[input.language]}, like a friendly staff member: 1-3 short sentences, warm, no pressure. Never offer discounts, new prices or terms, never invent deadlines or scarcity, never say you're an AI. No sign-off. If you use their name (${input.customerName}), write it exactly. Plain text.`,
+			},
+			{
+				role: "user",
+				content: `Recent chat:\n${transcript(input.recentChat.slice(-6))}\n\nThis is follow-up #${input.reminderNumber}. ${situation}\n\nWrite only the message.`,
+			},
+		],
+	});
+	return res.choices[0]?.message?.content?.trim() || "";
 }

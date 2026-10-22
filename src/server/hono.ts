@@ -4,7 +4,11 @@ import { eq } from "drizzle-orm";
 import { Hono } from "hono";
 import { getDb, schema } from "#/db";
 import router from "#/orpc/router";
+import { startFollowUpScheduler } from "./followups";
 import { renderQuotePdf } from "./quote-pdf";
+
+// Reminders for unsigned quotes: checked every minute.
+startFollowUpScheduler();
 
 const rpc = new RPCHandler(router, {
 	interceptors: [onError((error) => console.error("[orpc]", error))],

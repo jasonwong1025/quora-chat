@@ -37,11 +37,21 @@ const styles = {
 		label: "Replaced",
 		className: "bg-muted text-muted-foreground",
 	},
+	lost: {
+		label: "Lost",
+		className: "bg-status-rejected/15 text-status-rejected",
+	},
 } as const;
 
 /** Badge status for a quote row (draft / approved / rejected / accepted). */
 export function quoteBadge(
-	status: "draft" | "approved" | "rejected" | "accepted" | "superseded",
+	status:
+		| "draft"
+		| "approved"
+		| "rejected"
+		| "accepted"
+		| "superseded"
+		| "lost",
 ): RequestStatus {
 	return status === "draft"
 		? "draft_ready"

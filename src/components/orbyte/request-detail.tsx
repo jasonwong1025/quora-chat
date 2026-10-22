@@ -1,5 +1,6 @@
 import { AlertTriangle, ArrowLeft, PenLine, RotateCcw } from "lucide-react";
 import { ActivityFeed } from "#/components/activity-feed";
+import { FollowUpPanel } from "#/components/orbyte/follow-up-panel";
 import { RequirementBrief } from "#/components/orbyte/requirement-brief";
 import { useWorkspace } from "#/components/orbyte/workspace";
 import { QuoteEditor } from "#/components/quote-editor";
@@ -109,6 +110,12 @@ export function RequestDetail(props: {
 							Sent on WhatsApp — waiting for the customer to sign
 							{request.quote.viewedAt ? " (opened)" : ""}.
 						</p>
+					)}
+					{(request.quote.status === "approved" ||
+						request.quote.status === "lost") && (
+						<div className="mb-2">
+							<FollowUpPanel quote={request.quote} />
+						</div>
 					)}
 					{request.quote.status === "accepted" && (
 						<p className="mb-2 flex items-center gap-2 rounded-md bg-status-approved/10 px-3 py-2 text-sm">

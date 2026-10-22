@@ -32,6 +32,16 @@ export const businesses = pgTable("businesses", {
 	sstRegistered: boolean("sst_registered").default(true).notNull(),
 	sstRateBps: integer("sst_rate_bps").default(800).notNull(), // 800 = 8.00%
 	quoteValidityDays: integer("quote_validity_days").default(14).notNull(),
+	// Following up unsigned quotes. Times are Malaysia time (UTC+8).
+	followUpMax: integer("follow_up_max").default(3).notNull(),
+	followUpGapDays: integer("follow_up_gap_days").default(2).notNull(),
+	workStart: text("work_start").default("09:00").notNull(),
+	workEnd: text("work_end").default("19:00").notNull(),
+	workDays: jsonb("work_days")
+		.$type<number[]>()
+		.default([1, 2, 3, 4, 5, 6])
+		.notNull(), // 0 = Sunday
+	extendDays: integer("extend_days").default(7).notNull(),
 	createdAt: createdAt(),
 });
 
@@ -295,7 +305,18 @@ export const quoteStatus = pgEnum("quote_status", [
 	"rejected",
 	"accepted", // signed by the customer
 	"superseded", // replaced by a newer revision
+	"lost", // the customer said no, or it expired unsigned
 ]);
+
+export const lostReasons = [
+	"price",
+	"timing",
+	"competitor",
+	"not_needed",
+	"no_reply",
+	"other",
+] as const;
+export type LostReason = (typeof lostReasons)[number];
 
 export const quotes = pgTable("quotes", {
 	id: id(),
@@ -322,6 +343,41 @@ export const quotes = pgTable("quotes", {
 	signedAt: timestamp("signed_at", { withTimezone: true }),
 	signerName: text("signer_name"),
 	signatureImage: text("signature_image"), // PNG data URL
+	// Following up while it's unsigned.
+	followUpsPaused: boolean("follow_ups_paused").default(false).notNull(),
+	pausedUntil: timestamp("paused_until", { withTimezone: true }), // customer said "later"
+	extendedAt: timestamp("extended_at", { withTimezone: true }), // validity extended once
+	lostReason: text("lost_reason").$type<LostReason>(),
+	lostNote: text("lost_note"),
+	lostAt: timestamp("lost_at", { withTimezone: true }),
+	createdAt: createdAt(),
+});
+
+/** Reminders for a sent-but-unsigned quote. The AI picks the time; code enforces the limits. */
+export const quoteFollowUps = pgTable("quote_follow_ups", {
+	id: id(),
+	businessId: text("business_id")
+		.notNull()
+		.references(() => businesses.id, { onDelete: "cascade" }),
+	quoteId: text("quote_id")
+		.notNull()
+		.references(() => quotes.id, { onDelete: "cascade" }),
+	conversationId: text("conversation_id")
+		.notNull()
+		.references(() => conversations.id, { onDelete: "cascade" }),
+	kind: text("kind")
+		.$type<"reminder" | "extension">()
+		.default("reminder")
+		.notNull(),
+	status: text("status")
+		.$type<"scheduled" | "sent" | "cancelled">()
+		.default("scheduled")
+		.notNull(),
+	dueAt: timestamp("due_at", { withTimezone: true }).notNull(),
+	reason: text("reason"), // why the AI picked this time
+	body: text("body"), // the message, once sent
+	messageId: text("message_id"),
+	sentAt: timestamp("sent_at", { withTimezone: true }),
 	createdAt: createdAt(),
 });
 

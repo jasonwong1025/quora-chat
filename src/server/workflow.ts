@@ -39,6 +39,13 @@ import {
 	readTurn,
 	writeReply,
 } from "./ai";
+import {
+	onCustomerReplyToQuote,
+	onQuoteClosed,
+	onQuoteOpened,
+	onQuoteSent,
+	todayMY,
+} from "./followups";
 import { matchRelayAnswer, startHandover } from "./jobs";
 import { emitOrbyteEvent } from "./orbyte";
 import { formatMYR, priceBrief, totals } from "./pricing";
@@ -942,6 +949,7 @@ export async function* handleCustomerMessage(input: {
 				: null,
 			history,
 			latestHasAttachment: Boolean(attachment),
+			today: todayMY(),
 		});
 	} catch (err) {
 		// Never guess: if the AI fails, hand the conversation to a human.
@@ -982,6 +990,13 @@ export async function* handleCustomerMessage(input: {
 		language: reading.language,
 		itemCount: reading.items.filter((i) => !i.removed).length,
 	};
+
+	// Haggling or declining is never a "change the quote" request.
+	if (
+		reading.quoteResponse.intent === "price_concern" ||
+		reading.quoteResponse.intent === "not_interested"
+	)
+		reading.wantsChange = false;
 
 	// After a quote was sent, anything that isn't a change to it is a new enquiry:
 	// start a fresh brief with only the new items.
@@ -1029,6 +1044,47 @@ export async function* handleCustomerMessage(input: {
 		}),
 	});
 
+	// A reply to a quote that's waiting for their signature ("later", price, no thanks).
+	if (!open && sent && !reading.wantsChange) {
+		const handled = await onCustomerReplyToQuote({
+			quoteId: sent.quote.id,
+			response: reading.quoteResponse,
+			customerName: conversation.customerName,
+		});
+		if (handled) {
+			await run.setRequest(sent.request.id);
+			await run.add({
+				kind: "decide",
+				title: handled.summary,
+				detail: [`About ${sent.quote.number}, still waiting for a signature`],
+			});
+			const reply =
+				(await writeReply({
+					business: catalog.business,
+					customerName: conversation.customerName,
+					language: reading.language,
+					plan: { stage: "note", instruction: handled.instruction },
+					customerQuestion: reading.customerQuestion,
+					notOffered: [],
+					history,
+					firstReply: false,
+				}).catch(() => "")) || fallbackReply(reading.language);
+			yield { step: "staged", status: null, requestId: sent.request.id };
+			await db.insert(schema.messages).values({
+				conversationId: conversation.id,
+				sender: "assistant",
+				body: reply,
+			});
+			await run.add({
+				kind: "reply",
+				title: `Replied in ${languageLabel[reading.language]}`,
+			});
+			await run.finish("done");
+			yield { step: "replied", body: reply };
+			return;
+		}
+	}
+
 	// A change to a quote that was already sent reopens its request as a revision.
 	let request = open;
 	if (!request && sent && reading.wantsChange) {
@@ -1037,6 +1093,7 @@ export async function* handleCustomerMessage(input: {
 			status: "gathering",
 			brief,
 		});
+		await onQuoteClosed(sent.quote.id); // no reminders while they change it
 		await emitOrbyteEvent(db, {
 			businessId,
 			requestId: request.id,
@@ -1517,6 +1574,7 @@ export async function decideQuote(input: {
 			actor: "eSign",
 			summary: `${quote.number} sent for customer signature`,
 		});
+		await onQuoteSent(quote.id, quote.supersedesId);
 	}
 	return row;
 }
@@ -1632,6 +1690,7 @@ export async function markQuoteViewed(quoteId: string) {
 		actor: "eSign",
 		summary: `Customer opened ${quote.number} for signing`,
 	});
+	await onQuoteOpened(quote.id);
 	return row;
 }
 
@@ -1645,6 +1704,10 @@ export async function signQuote(input: {
 	if (quote.status === "accepted") throw new Error("Already signed");
 	if (quote.status === "superseded")
 		throw new Error("This quotation was replaced by a newer version");
+	if (quote.status === "lost")
+		throw new Error(
+			"This quotation is no longer open. Please message us for a new one.",
+		);
 	if (quote.status !== "approved")
 		throw new Error("This quotation is not open for signing");
 	if (quote.validUntil < new Date())
@@ -1670,6 +1733,7 @@ export async function signQuote(input: {
 		actor: input.signerName,
 		summary: `${input.signerName} signed ${quote.number}`,
 	});
+	await onQuoteClosed(quote.id);
 	await reserveStock(quote, request.id, input.signerName);
 	await emitOrbyteEvent(db, {
 		businessId: quote.businessId,

@@ -15,6 +15,7 @@ import { getDemoBusiness } from "#/data/demo";
 import { getDb, schema } from "#/db";
 import { suggestSku, uniqueSku } from "#/lib/sku";
 import { suggestQuestions } from "#/server/ai";
+import { fastForward, followUpAction } from "#/server/followups";
 import {
 	addTask,
 	askJobAssistant,
@@ -1394,6 +1395,92 @@ const setCategoryPic = os
 		return { ok: true };
 	});
 
+// --- Following up unsigned quotes ----------------------------------------------------------
+
+const quoteFollowUps = os
+	.input(z.object({ quoteId: z.string() }))
+	.handler(({ input }) =>
+		getDb()
+			.select()
+			.from(schema.quoteFollowUps)
+			.where(
+				and(
+					eq(schema.quoteFollowUps.quoteId, input.quoteId),
+					ne(schema.quoteFollowUps.status, "cancelled"),
+				),
+			)
+			.orderBy(asc(schema.quoteFollowUps.dueAt)),
+	);
+
+const quoteFollowUpAction = os
+	.input(
+		z.object({
+			quoteId: z.string(),
+			staffId: z.string(),
+			action: z.enum(["pause", "resume", "send_now", "mark_lost"]),
+			reason: z
+				.enum([
+					"price",
+					"timing",
+					"competitor",
+					"not_needed",
+					"no_reply",
+					"other",
+				])
+				.optional(),
+			note: z.string().max(300).optional(),
+		}),
+	)
+	.handler(({ input }) => followUpAction(input).catch(fail));
+
+const updateFollowUpRules = os
+	.input(
+		businessInput.extend({
+			staffId: z.string(),
+			followUpMax: z.number().int().min(0).max(10),
+			followUpGapDays: z.number().int().min(1).max(30),
+			workStart: z.string().regex(/^\d{2}:\d{2}$/),
+			workEnd: z.string().regex(/^\d{2}:\d{2}$/),
+			workDays: z.array(z.number().int().min(0).max(6)).min(1),
+			extendDays: z.number().int().min(0).max(60),
+		}),
+	)
+	.handler(async ({ input }) => {
+		const db = getDb();
+		const member = await db.query.staff.findFirst({
+			where: and(
+				eq(schema.staff.id, input.staffId),
+				eq(schema.staff.businessId, input.businessId),
+			),
+		});
+		if (!member?.canApprove)
+			fail(
+				new Error("Only someone who can approve quotes can change these rules"),
+			);
+		if (input.workStart >= input.workEnd)
+			fail(new Error("Working hours must end after they start"));
+		const { businessId, staffId: _s, ...rules } = input;
+		await db
+			.update(schema.businesses)
+			.set(rules)
+			.where(eq(schema.businesses.id, businessId));
+		await emitOrbyteEvent(db, {
+			businessId,
+			type: "followup.resumed",
+			actor: member?.name ?? "staff",
+			summary: `${member?.name ?? "Staff"} updated the follow-up rules`,
+			payload: rules,
+		});
+		return { ok: true };
+	});
+
+/** Demo only: pretend days have passed for one business. */
+const demoFastForward = os
+	.input(businessInput.extend({ days: z.number().int().min(1).max(30) }))
+	.handler(({ input }) =>
+		fastForward(input.businessId, input.days).catch(fail),
+	);
+
 export default {
 	businesses: { list: listBusinesses, get: getBusiness },
 	conversations: {
@@ -1427,7 +1514,15 @@ export default {
 		move: moveQuestion,
 		suggest: suggestPresetQuestions,
 	},
-	quotes: { get: getQuote, update: updateQuote, decide },
+	quotes: {
+		get: getQuote,
+		update: updateQuote,
+		decide,
+		followUps: quoteFollowUps,
+		followUp: quoteFollowUpAction,
+	},
+	followUpRules: { update: updateFollowUpRules },
+	demo: { fastForward: demoFastForward },
 	jobs: {
 		list: listJobs,
 		get: getJob,

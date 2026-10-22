@@ -10,8 +10,9 @@ Customers send messages in English, Bahasa Melayu, Chinese, or a mix. Like a goo
 4. **Drafts the quotation.** Fixed-price items are priced by deterministic code from the catalog and pricing rules; the AI never sets a price. Custom-priced work (software, audits…) goes to staff with a structured requirement brief to price.
 5. Staff review and approve in Orbyte. The quote goes back on WhatsApp as a PDF with a **Review & sign** link (**Orbyte eSign**).
 6. If the customer asks for changes, the AI confirms them and drafts a **revision** (`-R2`); approving it replaces the earlier version.
-7. **Handover after signing.** Quora Chat creates the Client and a job in **Orbyte Work**, named by what was bought (Delivery order / Job order / Project), assigns the category's default **PIC**, and the AI writes a handover pack: briefing, scope, key requirements, what we promised in chat, watch-outs and starting tasks. The PIC is notified (simulated Orbyte app + email). Completing a delivery order hands over its reserved stock.
-8. **The PIC never talks to the customer.** Their **job assistant** answers from the whole chat, brief, quote and files, shows where it found each answer, and suggests actions (add task, flag a blocker, ask the customer). "Ask the customer" drafts a friendly WhatsApp message that **sales approve** in the Quotation inbox; the customer's reply is routed back to the job and the PIC is notified.
+7. **Following up unsigned quotes.** Customers often take days to sign. The AI picks when to nudge (opened or not, their deadline, the chat) and writes a short, friendly reminder; code enforces the business's limits (max reminders, days apart, working hours, never after expiry). Replies are routed: "later" snoozes until their date, a price concern pauses reminders and alerts staff (the AI never discounts), "no thanks" marks the quote **Lost** with the reason. At expiry it's extended once, then marked Lost. Staff can pause, resume, send now or mark lost. A **demo clock** in the sidebar (+1d / +3d / +7d) shows the multi-day flow live.
+8. **Handover after signing.** Quora Chat creates the Client and a job in **Orbyte Work**, named by what was bought (Delivery order / Job order / Project), assigns the category's default **PIC**, and the AI writes a handover pack: briefing, scope, key requirements, what we promised in chat, watch-outs and starting tasks. The PIC is notified (simulated Orbyte app + email). Completing a delivery order hands over its reserved stock.
+9. **The PIC never talks to the customer.** Their **job assistant** answers from the whole chat, brief, quote and files, shows where it found each answer, and suggests actions (add task, flag a blocker, ask the customer). "Ask the customer" drafts a friendly WhatsApp message that **sales approve** in the Quotation inbox; the customer's reply is routed back to the job and the PIC is notified.
 
 Throughout, staff can see the live **requirement brief** (answers, their source, what's missing), fill in or skip answers, add their own question for the AI to ask, press **Ask now** or **Draft now**, read the AI's reasoning ("AI thinking"), or **take over** the chat. The code decides what to ask and when to draft; the AI reads answers and words the messages. Every step is recorded as a **simulated Orbyte activity event**.
 
@@ -72,6 +73,7 @@ src/
     ai.ts               reads messages into the brief, writes replies, suggests questions (OpenRouter)
     pricing.ts          deterministic pricing engine
     workflow.ts         message → brief → ask / confirm / draft → approval → revision → signing
+    followups.ts        reminders for unsigned quotes, reply routing, extension, lost, demo clock
     jobs.ts             handover after signing: client, job, PIC, assistant, relayed questions, notifications
     orbyte.ts           simulated Orbyte activity events
     hono.ts             /api app: oRPC handler, quote PDF, product images, health
