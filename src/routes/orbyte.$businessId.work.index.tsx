@@ -88,9 +88,47 @@ function Work() {
 			) : list.length === 0 ? (
 				<div className="rounded-xl border border-dashed bg-card p-10 text-center text-sm text-muted-foreground">
 					<Briefcase className="mx-auto mb-2 size-8" />
-					{scope === "mine" && all.length > 0
-						? "Nothing assigned to you. Switch to All jobs to see the team's."
-						: "No jobs yet. A job appears here, with its handover pack, as soon as a customer signs a quotation."}
+					{scope === "mine" && all.length > 0 ? (
+						"Nothing assigned to you. Switch to All jobs to see the team's."
+					) : (
+						<div className="mx-auto max-w-md space-y-3">
+							<p>
+								No jobs yet. A job appears here as soon as a customer signs a
+								quotation. Open it to see the handover pack and the{" "}
+								<span className="font-medium text-foreground">team chat</span>,
+								where the PIC, assigned workers and the AI (tag @AI) work
+								together.
+							</p>
+							<ol className="list-decimal space-y-1 pl-5 text-left text-xs">
+								<li>
+									In{" "}
+									<a
+										href={`/whatsapp?chat=${business.id}`}
+										target="_blank"
+										rel="noreferrer"
+										className="text-primary hover:underline"
+									>
+										WhatsApp
+									</a>
+									, send {business.name} an enquiry and answer its questions.
+								</li>
+								<li>
+									In{" "}
+									<Link
+										to="/orbyte/$businessId/quotes"
+										params={{ businessId: business.id }}
+										className="text-primary hover:underline"
+									>
+										Quotes
+									</Link>
+									, approve the draft (price custom items first).
+								</li>
+								<li>
+									Back in WhatsApp, tap <em>Review &amp; sign</em> and sign.
+								</li>
+							</ol>
+						</div>
+					)}
 				</div>
 			) : (
 				<div

@@ -6,7 +6,8 @@
 		"#/*": "./src/*"
 	},
 	"scripts": {
-		"dev": "vite dev --port 3000",
+		"dev": "node scripts/start-with-worker.mjs --dev",
+		"dev:web": "vite dev --port 3000",
 		"build": "vite build",
 		"start": "node --env-file-if-exists=.env .output/server/index.mjs",
 		"start:with-worker": "node scripts/start-with-worker.mjs",

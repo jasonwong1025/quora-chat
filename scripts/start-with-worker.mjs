@@ -1,18 +1,27 @@
 import { spawn } from "node:child_process";
 
-// One always-on host can supervise both processes; either failure restarts the deployment.
-const children = [
-	spawn(
-		process.execPath,
-		["--env-file-if-exists=.env", ".output/server/index.mjs"],
-		{ stdio: "inherit" },
-	),
-	spawn(
-		process.execPath,
-		["--env-file-if-exists=.env", "--import", "tsx", "scripts/worker.ts"],
-		{ stdio: "inherit" },
-	),
-];
+// Runs the web app and the background worker together, so signing always leads
+// to a job and its handover. `--dev` uses the Vite dev server (pnpm dev);
+// otherwise the production build (pnpm start:with-worker). If either process
+// stops, both stop.
+const dev = process.argv.includes("--dev");
+const web = dev
+	? spawn(
+			process.execPath,
+			["node_modules/vite/bin/vite.js", "dev", "--port", "3000"],
+			{ stdio: "inherit" },
+		)
+	: spawn(
+			process.execPath,
+			["--env-file-if-exists=.env", ".output/server/index.mjs"],
+			{ stdio: "inherit" },
+		);
+const worker = spawn(
+	process.execPath,
+	["--env-file-if-exists=.env", "--import", "tsx", "scripts/worker.ts"],
+	{ stdio: "inherit" },
+);
+const children = [web, worker];
 let stopping = false;
 function stop(code) {
 	if (stopping) return;

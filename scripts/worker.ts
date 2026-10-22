@@ -13,7 +13,16 @@ process.on("SIGTERM", () => {
 
 try {
 	while (running) {
-		const worked = await runNextTask();
+		let worked = false;
+		try {
+			worked = await runNextTask();
+		} catch (err) {
+			// e.g. the database briefly unreachable: keep going rather than exit.
+			console.error("[worker] could not run a task", err);
+			if (once) throw err;
+			await setTimeout(5000);
+			continue;
+		}
 		if (!worked && once) break;
 		if (!worked) await setTimeout(1000);
 	}
