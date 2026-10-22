@@ -265,6 +265,37 @@ function faqAnswer(knowledge: Passage[] | undefined) {
 	return sentences.slice(0, 2).join(" ").trim();
 }
 
+/** "2026-10-30" → "Fri, 30 Oct 2026" */
+const day = (s: string) =>
+	s.replace(/\b(\d{4}-\d{2}-\d{2})\b/g, (iso) =>
+		new Date(`${iso}T00:00:00+08:00`).toLocaleDateString("en-MY", {
+			timeZone: "Asia/Kuala_Lumpur",
+			weekday: "short",
+			day: "numeric",
+			month: "short",
+			year: "numeric",
+		}),
+	);
+
+/**
+ * A recap line as a person would write it. Code gives "Flyer A5 × 1000 pc: Which
+ * paper? → 157gsm art paper; Single or double sided? → double"; a live model
+ * rephrases that, so replay tidies it the same way.
+ */
+function tidy(line: string) {
+	const [head, ...rest] = line.split(": ");
+	const details = rest.join(": ");
+	if (details.includes(" → "))
+		return day(
+			`${head}: ${details
+				.split("; ")
+				.map((d) => d.split(" → ")[1] ?? d)
+				.join(", ")}`,
+		);
+	const [q, a] = line.split(" → ");
+	return a === undefined ? day(line) : day(`${q.replace(/\?$/, "")}: ${a}`);
+}
+
 export function replayReply(input: ReplyInput): string {
 	const p = phrasesFor(input.language);
 	const plan = input.plan;
@@ -285,7 +316,7 @@ export function replayReply(input: ReplyInput): string {
 				.join("\n")}`;
 			break;
 		case "confirming":
-			body = `${p.recap}\n${plan.summary.map((l) => `- ${l}`).join("\n")}\n${p.confirm}`;
+			body = `${p.recap}\n${plan.summary.map((l) => `- ${tidy(l)}`).join("\n")}\n${p.confirm}`;
 			break;
 		case "drafted":
 			body = plan.customPriced ? p.custom : p.drafted;
@@ -335,10 +366,10 @@ function briefFacts(c: JobContext) {
 	return c.brief.map((line) => {
 		const [left, value] = line.split(" → ");
 		if (value === undefined) return { label: "Item", value: line };
-		const label = left.includes(": ")
-			? left.split(": ").slice(1).join(": ")
-			: left;
-		return { label, value };
+		const label = (
+			left.includes(": ") ? left.split(": ").slice(1).join(": ") : left
+		).replace(/\?$/, "");
+		return { label, value: day(value) };
 	});
 }
 
@@ -422,18 +453,21 @@ export function replayJobAnswer(input: {
 		input.question,
 		1,
 	);
-	const kb = input.knowledge.find((k) => k.ref === kbHit?.docId);
 	const general =
 		/what|agree|setuju|want|need|requirement|scope|summary|deadline|bila/i.test(
 			input.question,
 		);
+	// "What did they agree to?" is answered from the agreement alone.
+	const kb = general
+		? undefined
+		: input.knowledge.find((k) => k.ref === kbHit?.docId);
+	const factLine = (f: { label: string; value: string }) =>
+		f.label === "Item" ? f.value : `${f.label}: ${f.value}`;
 	const lines = (
-		agreed.length
-			? agreed.map((a) => a.text)
-			: general
-				? facts.map((f) => `${f.label}: ${f.value}`)
-				: []
-	).slice(0, 6);
+		general
+			? facts.map(factLine)
+			: agreed.map((a) => factLine(facts[Number(a.docId.slice(1))]))
+	).slice(0, 8);
 	if (!lines.length && !kb && !chat.length)
 		return {
 			answer:
@@ -446,7 +480,9 @@ export function replayJobAnswer(input: {
 		lines.length
 			? `From the signed agreement:\n${lines.map((l) => `- ${l}`).join("\n")}`
 			: "",
-		kb ? `Our procedure "${kb.title}" says: ${kb.text.split("\n")[0]}` : "",
+		kb
+			? `Our ${kb.category === "FAQ" ? "FAQ" : "procedure"} "${kb.title}" says: ${kb.text.split("\n")[0]}`
+			: "",
 	]
 		.filter(Boolean)
 		.join("\n\n");
