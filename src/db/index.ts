@@ -17,4 +17,9 @@ export function getDb() {
 	return instance;
 }
 
+export type Transaction = Parameters<
+	Parameters<ReturnType<typeof getDb>["transaction"]>[0]
+>[0];
+export type Database = ReturnType<typeof getDb> | Transaction;
+
 export { schema };

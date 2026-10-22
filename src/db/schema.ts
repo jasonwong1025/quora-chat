@@ -219,11 +219,15 @@ export type Answer = {
 	by?: string; // staff name
 	fileMessageId?: string; // for "file" answers: the message carrying the attachment
 	at: string; // ISO time
+	state?: "known" | "ambiguous" | "conflicting";
+	waiverReason?: string;
+	label?: string; // captured question label, retained if the preset is edited later
 };
 
 /** One product or service the customer wants. */
 export type BriefItem = {
 	id: string;
+	productName?: string;
 	/** "exact" = one clear catalog match, "ambiguous" = several could fit, "none" = not in catalog. */
 	match: "exact" | "ambiguous" | "none";
 	productId: string | null;
@@ -243,6 +247,8 @@ export type FollowUp = {
 	answer: string | null;
 	asked: boolean; // has it been put to the customer yet
 	at: string;
+	waivedBy?: string;
+	waiverReason?: string;
 };
 
 /** Everything gathered so far for one quotation request. */
@@ -282,12 +288,36 @@ export const quoteRequests = pgTable("quote_requests", {
 		.references(() => conversations.id, { onDelete: "cascade" }),
 	status: requestStatus("status").notNull(),
 	brief: jsonb("brief").$type<Brief>().notNull(),
+	briefVersion: integer("brief_version").default(1).notNull(),
+	processedMessageId: text("processed_message_id"),
 	flags: jsonb("flags").$type<Flag[]>().default([]).notNull(),
 	createdAt: createdAt(),
 	updatedAt: timestamp("updated_at", { withTimezone: true })
 		.defaultNow()
 		.notNull(),
 });
+
+/** Append-only record of each substantive requirement change. */
+export const requirementVersions = pgTable(
+	"requirement_versions",
+	{
+		id: id(),
+		requestId: text("request_id")
+			.notNull()
+			.references(() => quoteRequests.id, { onDelete: "cascade" }),
+		version: integer("version").notNull(),
+		brief: jsonb("brief").$type<Brief>().notNull(),
+		actor: text("actor").notNull(),
+		reason: text("reason").notNull(),
+		createdAt: createdAt(),
+	},
+	(t) => [
+		uniqueIndex("requirement_versions_request_version").on(
+			t.requestId,
+			t.version,
+		),
+	],
+);
 
 export type LineItem = {
 	productId: string | null;
@@ -330,6 +360,9 @@ export const quotes = pgTable("quotes", {
 		.notNull()
 		.references(() => quoteRequests.id, { onDelete: "cascade" }),
 	status: quoteStatus("status").default("draft").notNull(),
+	/** Null on legacy quotes until a new draft is prepared. */
+	requirementVersion: integer("requirement_version"),
+	requirementsSnapshot: jsonb("requirements_snapshot").$type<Brief | null>(),
 	lineItems: jsonb("line_items").$type<LineItem[]>().notNull(),
 	subtotalSen: integer("subtotal_sen").notNull(),
 	sstSen: integer("sst_sen").notNull(),
@@ -490,37 +523,86 @@ export type Handover = {
 	timeline: string | null;
 	watchOuts: string[];
 	customerNotes: string | null; // e.g. preferred language, how they communicate
+	suggestedTasks?: string[]; // revision suggestions require PIC review
 };
 
-export const jobs = pgTable("jobs", {
+export const jobs = pgTable(
+	"jobs",
+	{
+		id: id(),
+		number: text("number").notNull().unique(), // e.g. "KD-PRJ-0001"
+		businessId: text("business_id")
+			.notNull()
+			.references(() => businesses.id, { onDelete: "cascade" }),
+		clientId: text("client_id")
+			.notNull()
+			.references(() => clients.id, { onDelete: "cascade" }),
+		requestId: text("request_id")
+			.notNull()
+			.references(() => quoteRequests.id, { onDelete: "cascade" }),
+		quoteId: text("quote_id")
+			.notNull()
+			.references(() => quotes.id, { onDelete: "cascade" }),
+		conversationId: text("conversation_id")
+			.notNull()
+			.references(() => conversations.id, { onDelete: "cascade" }),
+		kind: jobKind("kind").notNull(),
+		title: text("title").notNull(),
+		status: jobStatus("status").default("preparing").notNull(),
+		picId: text("pic_id").references(() => staff.id, { onDelete: "set null" }),
+		handover: jsonb("handover").$type<Handover | null>(),
+		agreementReviewRequired: boolean("agreement_review_required")
+			.default(false)
+			.notNull(),
+		createdAt: createdAt(),
+		updatedAt: timestamp("updated_at", { withTimezone: true })
+			.defaultNow()
+			.notNull(),
+		completedAt: timestamp("completed_at", { withTimezone: true }),
+	},
+	(t) => [uniqueIndex("jobs_quote_unique").on(t.quoteId)],
+);
+
+/** Persistent work claimed by a worker; completion is committed with its effects. */
+export const workflowTasks = pgTable("workflow_tasks", {
 	id: id(),
-	number: text("number").notNull().unique(), // e.g. "KD-PRJ-0001"
-	businessId: text("business_id")
-		.notNull()
-		.references(() => businesses.id, { onDelete: "cascade" }),
-	clientId: text("client_id")
-		.notNull()
-		.references(() => clients.id, { onDelete: "cascade" }),
-	requestId: text("request_id")
-		.notNull()
-		.references(() => quoteRequests.id, { onDelete: "cascade" }),
-	quoteId: text("quote_id")
-		.notNull()
-		.references(() => quotes.id, { onDelete: "cascade" }),
-	conversationId: text("conversation_id")
-		.notNull()
-		.references(() => conversations.id, { onDelete: "cascade" }),
-	kind: jobKind("kind").notNull(),
-	title: text("title").notNull(),
-	status: jobStatus("status").default("preparing").notNull(),
-	picId: text("pic_id").references(() => staff.id, { onDelete: "set null" }),
-	handover: jsonb("handover").$type<Handover | null>(),
+	key: text("key").notNull().unique(),
+	kind: text("kind").notNull(), // create_handover | prepare_handover
+	entityId: text("entity_id").notNull(),
+	generation: text("generation"),
+	status: text("status").default("pending").notNull(),
+	attempts: integer("attempts").default(0).notNull(),
+	runAfter: timestamp("run_after", { withTimezone: true })
+		.defaultNow()
+		.notNull(),
+	lockedUntil: timestamp("locked_until", { withTimezone: true }),
+	claimToken: text("claim_token"),
+	lastError: text("last_error"),
 	createdAt: createdAt(),
 	updatedAt: timestamp("updated_at", { withTimezone: true })
 		.defaultNow()
 		.notNull(),
-	completedAt: timestamp("completed_at", { withTimezone: true }),
 });
+
+/** A reservation belongs to one accepted quote, never to another job. */
+export const stockReservations = pgTable(
+	"stock_reservations",
+	{
+		id: id(),
+		quoteId: text("quote_id")
+			.notNull()
+			.references(() => quotes.id, { onDelete: "cascade" }),
+		productId: text("product_id")
+			.notNull()
+			.references(() => products.id, { onDelete: "cascade" }),
+		quantity: integer("quantity").notNull(),
+		deliveredAt: timestamp("delivered_at", { withTimezone: true }),
+		createdAt: createdAt(),
+	},
+	(t) => [
+		uniqueIndex("stock_reservations_quote_product").on(t.quoteId, t.productId),
+	],
+);
 
 export const taskStatus = pgEnum("task_status", [
 	"todo",

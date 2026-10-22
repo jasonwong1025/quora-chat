@@ -13,7 +13,7 @@ function getClient() {
 	}
 	client = new OpenAI({
 		apiKey,
-		baseURL: "https://openrouter.ai/api/v1",
+		baseURL: process.env.AI_BASE_URL || "https://openrouter.ai/api/v1",
 		defaultHeaders: { "X-Title": "Quora Chat" },
 	});
 	return client;
@@ -65,10 +65,16 @@ const obj = (properties: Record<string, unknown>) => ({
 });
 const answerList = {
 	type: "array",
-	items: obj({ key: str, values: strList }),
+	items: obj({
+		key: str,
+		values: strList,
+		state: { type: "string", enum: ["known", "ambiguous", "conflicting"] },
+		evidenceMessageId: strOrNull,
+	}),
 } as const;
 
 export type ChatTurn = {
+	id?: string;
 	sender: "customer" | "assistant" | "staff";
 	body: string;
 	attachment?: { name: string; mime: string } | null;
@@ -81,7 +87,7 @@ function transcript(history: ChatTurn[]) {
 			const file = m.attachment
 				? ` [sent a file: ${m.attachment.name} (${m.attachment.mime.startsWith("image/") ? "photo" : "document"})]`
 				: "";
-			return `${who}:${file} ${m.body}`.trim();
+			return `${m.id ? `[${m.id}] ` : ""}${who}:${file} ${m.body}`.trim();
 		})
 		.join("\n");
 }
@@ -123,12 +129,18 @@ export type ReadInput = {
 	};
 	openFollowUps: { id: string; question: string }[];
 	stage: "gathering" | "confirming";
-	sentQuote: { number: string; lines: string[] } | null;
+	sentQuote: { number: string; lines: string[]; signed: boolean } | null;
 	history: ChatTurn[];
 	latestHasAttachment: boolean;
 	today: string; // YYYY-MM-DD, Malaysia time
 };
 
+const readAnswerSchema = z.object({
+	key: z.string(),
+	values: z.array(z.string()),
+	state: z.enum(["known", "ambiguous", "conflicting"]),
+	evidenceMessageId: z.string().nullable(),
+});
 const readSchema = z.object({
 	language: z.enum(["en", "ms", "zh", "mixed"]),
 	summary: z.string(),
@@ -142,12 +154,10 @@ const readSchema = z.object({
 			quantity: z.number().nullable(),
 			removed: z.boolean(),
 			reason: z.string(),
-			answers: z.array(
-				z.object({ key: z.string(), values: z.array(z.string()) }),
-			),
+			answers: z.array(readAnswerSchema),
 		}),
 	),
-	general: z.array(z.object({ key: z.string(), values: z.array(z.string()) })),
+	general: z.array(readAnswerSchema),
 	followUpAnswers: z.array(z.object({ id: z.string(), answer: z.string() })),
 	followUp: z.object({ aboutKey: z.string(), question: z.string() }).nullable(),
 	confirmation: z.enum(["confirmed", "changed", "none"]),
@@ -227,7 +237,7 @@ ${JSON.stringify(input.brief)}
 
 Open follow-up questions waiting for an answer (JSON): ${JSON.stringify(input.openFollowUps)}
 Stage: ${input.stage}${input.stage === "confirming" ? " (we sent the customer a summary and asked them to confirm it)" : ""}
-${input.sentQuote ? `A quotation was already sent to this customer: ${input.sentQuote.number}: ${input.sentQuote.lines.join("; ")}` : "No quotation has been sent yet."}
+${input.sentQuote ? `A quotation was already ${input.sentQuote.signed ? "SIGNED" : "sent"} by this customer: ${input.sentQuote.number}: ${input.sentQuote.lines.join("; ")}` : "No quotation has been sent yet."}
 The latest customer message ${input.latestHasAttachment ? "HAS a file attached" : "has no attachment"}.
 
 Rules:
@@ -237,10 +247,11 @@ Rules:
 - quantity: only a number the customer stated or clearly implied ("two units" = 2). Otherwise null. Never assume.
 - answers: only keys from that product's questions. Only what the customer said or clearly implied, in any message. Map their words to the exact option text for single/multi/yes_no questions (e.g. "double side" → "double", "挂墙式" → "wall-mounted", "ya"/"boleh"/"可以" → "yes"). For number questions give the number or a short range in their words ("around 50"). For dates, the date or their words ("end of March"). For file questions, answer ["<attachment>"] only if the latest message has a file that fits. Never invent, assume or default an answer.
 - general: answers to the business-wide questions, same rules.
+- For every answer, state="known" only when the customer's meaning is usable for that question. Use "ambiguous" for unresolved or vague answers and "conflicting" when statements conflict without a clear correction. A later explicit correction replaces an earlier answer; it is not a conflict. Never mark "not sure" as known. evidenceMessageId must be the bracketed ID of the CUSTOMER message that supplies that answer, or null if no evidence is available. Never cite our own messages as customer requirements.
 - followUpAnswers: answers to the open follow-up questions, if the customer gave them.
 - followUp: only if an answer the customer just gave to one of the questions above is too vague or contradictory to quote on (e.g. "a few users", clashing dates): aboutKey = that question's key (or "quantity"), question = ONE short question to clear it up. Otherwise null (this is the usual case). Never ask technical or implementation questions (APIs, databases, file formats, hosting setup): our team works those out. Never use it for something a preset question already covers, or to ask for files.
 - confirmation: only at stage "confirming": "confirmed" if they agree the summary is right (ok / yes / betul / 对 / can / go ahead), "changed" if they correct or add anything. Otherwise "none".
-- wantsChange: true only if a quotation was already sent and the customer asks to change what's in it (quantity, specs, items, dates). Asking for a lower price or a discount is NOT a change: that's quoteResponse "price_concern". Declining is "not_interested", not a change.
+- wantsChange: true only if a quotation was already sent or signed and the latest customer message requests changed requirements, scope, quantities or deadlines for that work. An answer clarifying an existing requirement or a question about agreed work is not a scope change. Never silently merge an additional deliverable into a signed agreement. A pure price concern or refusal is not a scope change; if the same message also changes deliverables, keep wantsChange=true.
 - quoteResponse: only when a quotation was already sent and is waiting for their signature, how the latest message responds to it (otherwise intent "none"):
   - "later": they need more time / must ask their boss or partner. resumeOn = the date they'll be ready as YYYY-MM-DD (today is ${input.today}; "next week" = 7 days later, "end of month" = last day of the month), or null if they gave no time.
   - "price_concern": too expensive, asking for a discount or a better price.
@@ -711,11 +722,20 @@ export function readRelayAnswer(input: {
 }) {
 	return structured(
 		"relay_answer",
-		obj({ answers: { type: "boolean" }, answer: strOrNull }),
-		z.object({ answers: z.boolean(), answer: z.string().nullable() }),
+		obj({
+			answers: { type: "boolean" },
+			answer: strOrNull,
+			changesScope: { type: "boolean" },
+		}),
+		z.object({
+			answers: z.boolean(),
+			answer: z.string().nullable(),
+			changesScope: z.boolean(),
+		}),
 		`We asked a customer a question on WhatsApp on behalf of our team. Decide whether their reply answers it.
 - answers: true if the reply gives the information asked (even partly, or "don't know"), false if it's about something else.
-- answer: if answers=true, the answer as a short English note for our team (keep exact details; mention an attached file if there is one). Else null.`,
+- answer: if answers=true, the answer as a short English note for our team (keep exact details; mention an attached file if there is one). Else null.
+- changesScope: true if the reply also requests additional deliverables or a change to agreed scope, quantities or deadlines. This must go through the quotation change workflow rather than silently being treated as a clarification.`,
 		`Our team's question: ${input.question}\nMessage we sent: ${input.sentMessage}\nCustomer's reply: ${input.reply}${input.hasAttachment ? " [with a file attached]" : ""}`,
 		"minimal",
 	);

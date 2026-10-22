@@ -4,8 +4,9 @@
  * apart, working hours, never after expiry) and logs every step.
  */
 import { and, asc, desc, eq, inArray, lte, sql } from "drizzle-orm";
-import { getDb, schema } from "#/db";
+import { type Database, getDb, schema } from "#/db";
 import type { Language, LostReason } from "#/db/schema";
+import { quoteAgreementIssue } from "#/lib/agreements";
 import { answerText } from "#/lib/intake";
 import { planFollowUpTiming, writeFollowUp } from "./ai";
 import { notify } from "./jobs";
@@ -96,8 +97,8 @@ async function loadQuoteContext(quoteId: string) {
 	return { quote, business, request, conversation };
 }
 
-async function cancelScheduled(quoteId: string) {
-	await getDb()
+async function cancelScheduled(quoteId: string, db: Database = getDb()) {
+	await db
 		.update(schema.quoteFollowUps)
 		.set({ status: "cancelled" })
 		.where(
@@ -235,24 +236,44 @@ export async function planNextFollowUp(quoteId: string) {
 	}
 
 	const reason = `${ai.reason}${notes.length ? ` (${notes.join("; ")})` : ""}`;
-	const [row] = await db
-		.insert(schema.quoteFollowUps)
-		.values({
+	return db.transaction(async (tx) => {
+		const [current] = await tx
+			.select()
+			.from(schema.quotes)
+			.where(eq(schema.quotes.id, quote.id))
+			.for("update");
+		const currentRequest = await tx.query.quoteRequests.findFirst({
+			where: eq(schema.quoteRequests.id, request.id),
+		});
+		if (
+			!current ||
+			!currentRequest ||
+			current.status !== "approved" ||
+			current.followUpsPaused ||
+			currentRequest.status !== "approved" ||
+			quoteAgreementIssue(current, { ...currentRequest, status: "draft_ready" })
+		)
+			return null;
+		await cancelScheduled(quote.id, tx);
+		const [row] = await tx
+			.insert(schema.quoteFollowUps)
+			.values({
+				businessId: business.id,
+				quoteId: quote.id,
+				conversationId: conversation.id,
+				dueAt: due,
+				reason,
+			})
+			.returning();
+		await emitOrbyteEvent(tx, {
 			businessId: business.id,
-			quoteId: quote.id,
-			conversationId: conversation.id,
-			dueAt: due,
-			reason,
-		})
-		.returning();
-	await emitOrbyteEvent(db, {
-		businessId: business.id,
-		requestId: request.id,
-		type: "followup.scheduled",
-		actor: "quora-chat",
-		summary: `Follow-up ${reminders + 1}/${business.followUpMax} for ${quote.number} set for ${myTime(due)}: ${reason}`,
+			requestId: request.id,
+			type: "followup.scheduled",
+			actor: "quora-chat",
+			summary: `Follow-up ${reminders + 1}/${business.followUpMax} for ${quote.number} set for ${myTime(due)}: ${reason}`,
+		});
+		return row;
 	});
-	return row;
 }
 
 // --- Sending ---------------------------------------------------------------------------------
@@ -317,27 +338,57 @@ async function sendReminder(followUpId: string, byStaff?: string) {
 		}).catch(() => "")) ||
 		fallbackFollowUp(request.brief.language, quote.number);
 
-	const [message] = await db
-		.insert(schema.messages)
-		.values({ conversationId: conversation.id, sender: "assistant", body })
-		.returning();
-	await db
-		.update(schema.quoteFollowUps)
-		.set({
-			status: "sent",
-			body,
-			messageId: message.id,
-			sentAt: message.createdAt,
-		})
-		.where(eq(schema.quoteFollowUps.id, fu.id));
-	await emitOrbyteEvent(db, {
-		businessId: business.id,
-		requestId: request.id,
-		type: "followup.sent",
-		actor: byStaff ?? "quora-chat",
-		summary: `Follow-up ${number} sent for ${quote.number}${byStaff ? ` (sent now by ${byStaff})` : ""}`,
-		payload: { body },
+	const message = await db.transaction(async (tx) => {
+		const [currentRequest] = await tx
+			.select()
+			.from(schema.quoteRequests)
+			.where(eq(schema.quoteRequests.id, request.id))
+			.for("update");
+		const [current] = await tx
+			.select()
+			.from(schema.quotes)
+			.where(eq(schema.quotes.id, quote.id))
+			.for("update");
+		const [scheduled] = await tx
+			.select()
+			.from(schema.quoteFollowUps)
+			.where(eq(schema.quoteFollowUps.id, fu.id))
+			.for("update");
+		if (!scheduled || scheduled.status !== "scheduled") return null;
+		if (
+			current.status !== "approved" ||
+			current.validUntil <= new Date() ||
+			currentRequest.status !== "approved" ||
+			(current.followUpsPaused && !byStaff) ||
+			quoteAgreementIssue(current, { ...currentRequest, status: "draft_ready" })
+		) {
+			await cancelScheduled(quote.id, tx);
+			return null;
+		}
+		const [message] = await tx
+			.insert(schema.messages)
+			.values({ conversationId: conversation.id, sender: "assistant", body })
+			.returning();
+		await tx
+			.update(schema.quoteFollowUps)
+			.set({
+				status: "sent",
+				body,
+				messageId: message.id,
+				sentAt: message.createdAt,
+			})
+			.where(eq(schema.quoteFollowUps.id, fu.id));
+		await emitOrbyteEvent(tx, {
+			businessId: business.id,
+			requestId: request.id,
+			type: "followup.sent",
+			actor: byStaff ?? "quora-chat",
+			summary: `Follow-up ${number} sent for ${quote.number}${byStaff ? ` (sent now by ${byStaff})` : ""}`,
+			payload: { body },
+		});
+		return message;
 	});
+	if (!message) return null;
 	await planNextFollowUp(quote.id);
 	return message;
 }
@@ -412,47 +463,54 @@ export async function markLost(input: {
 	note?: string | null;
 	actor: string;
 }) {
-	const db = getDb();
 	const ctx = await loadQuoteContext(input.quoteId);
 	if (!ctx) throw new Error("Quote not found");
 	const { quote, business, request } = ctx;
 	if (quote.status !== "approved")
 		throw new Error("Only a sent, unsigned quote can be marked lost");
-	await cancelScheduled(quote.id);
-	const [row] = await db
-		.update(schema.quotes)
-		.set({
-			status: "lost",
-			lostReason: input.reason,
-			lostNote: input.note ?? null,
-			lostAt: new Date(),
-		})
-		.where(eq(schema.quotes.id, quote.id))
-		.returning();
-	await emitOrbyteEvent(db, {
-		businessId: business.id,
-		requestId: request.id,
-		type: "quote.lost",
-		actor: input.actor,
-		summary: `${quote.number} lost: ${input.reason.replace("_", " ")}${input.note ? ` (${input.note})` : ""}`,
+	return getDb().transaction(async (db) => {
+		const [row] = await db
+			.update(schema.quotes)
+			.set({
+				status: "lost",
+				lostReason: input.reason,
+				lostNote: input.note ?? null,
+				lostAt: new Date(),
+			})
+			.where(
+				and(
+					eq(schema.quotes.id, quote.id),
+					eq(schema.quotes.status, "approved"),
+				),
+			)
+			.returning();
+		if (!row) throw new Error("Only a sent, unsigned quote can be marked lost");
+		await cancelScheduled(quote.id, db);
+		await emitOrbyteEvent(db, {
+			businessId: business.id,
+			requestId: request.id,
+			type: "quote.lost",
+			actor: input.actor,
+			summary: `${quote.number} lost: ${input.reason.replace("_", " ")}${input.note ? ` (${input.note})` : ""}`,
+		});
+		const approvers = await db
+			.select({ id: schema.staff.id })
+			.from(schema.staff)
+			.where(
+				and(
+					eq(schema.staff.businessId, business.id),
+					eq(schema.staff.canApprove, true),
+				),
+			);
+		await notify(db, {
+			businessId: business.id,
+			staffIds: approvers.map((a) => a.id),
+			title: `${quote.number} lost`,
+			body: `Reason: ${input.reason.replace("_", " ")}${input.note ? `. ${input.note}` : ""}`,
+			link: `/orbyte/${business.id}/quotes?r=${request.id}`,
+		});
+		return row;
 	});
-	const approvers = await db
-		.select({ id: schema.staff.id })
-		.from(schema.staff)
-		.where(
-			and(
-				eq(schema.staff.businessId, business.id),
-				eq(schema.staff.canApprove, true),
-			),
-		);
-	await notify(db, {
-		businessId: business.id,
-		staffIds: approvers.map((a) => a.id),
-		title: `${quote.number} lost`,
-		body: `Reason: ${input.reason.replace("_", " ")}${input.note ? `. ${input.note}` : ""}`,
-		link: `/orbyte/${business.id}/quotes?r=${request.id}`,
-	});
-	return row;
 }
 
 // --- The scheduler -----------------------------------------------------------------------------
@@ -523,7 +581,8 @@ export const onQuoteOpened = (quoteId: string) =>
 		console.error("[follow-ups] plan", err),
 	);
 
-export const onQuoteClosed = (quoteId: string) => cancelScheduled(quoteId);
+export const onQuoteClosed = (quoteId: string, db?: Database) =>
+	cancelScheduled(quoteId, db);
 
 /**
  * The customer wrote back while a quote waits for their signature. Returns how

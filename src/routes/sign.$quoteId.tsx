@@ -225,7 +225,8 @@ function SignPanel(props: {
 					className="mt-1 accent-[var(--primary)]"
 				/>
 				<span>
-					I accept this quotation, including the prices and terms above.
+					I accept this quotation, including the requirements, prices and terms
+					above.
 				</span>
 			</label>
 			<Button

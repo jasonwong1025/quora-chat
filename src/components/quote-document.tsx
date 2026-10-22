@@ -1,4 +1,5 @@
 import { quoteBadge, StatusBadge } from "#/components/status-badge";
+import { agreementLines } from "#/lib/agreements";
 import { formatMYR } from "#/lib/money";
 import type { QuoteDetail } from "#/lib/types";
 
@@ -99,6 +100,18 @@ export function QuoteDocument({ q }: { q: QuoteDetail }) {
 				<section className="mt-8 text-sm">
 					<h2 className="font-semibold">Notes</h2>
 					<p className="whitespace-pre-wrap text-muted-foreground">{q.notes}</p>
+				</section>
+			)}
+			{q.requirementsSnapshot && (
+				<section className="mt-8 border-t pt-4 text-sm">
+					<h2 className="font-semibold">
+						Requirements included in this quotation
+					</h2>
+					<ul className="mt-2 space-y-1">
+						{agreementLines(q.requirementsSnapshot).map((line, i) => (
+							<li key={`${i}:${line}`}>{line}</li>
+						))}
+					</ul>
 				</section>
 			)}
 
