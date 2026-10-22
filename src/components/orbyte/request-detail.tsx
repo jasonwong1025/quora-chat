@@ -1,6 +1,7 @@
 import { AlertTriangle, ArrowLeft, PenLine, RotateCcw } from "lucide-react";
 import { ActivityFeed } from "#/components/activity-feed";
 import { FollowUpPanel } from "#/components/orbyte/follow-up-panel";
+import { NextActionBanner } from "#/components/orbyte/next-action";
 import { RequirementBrief } from "#/components/orbyte/requirement-brief";
 import { useWorkspace } from "#/components/orbyte/workspace";
 import { QuoteEditor } from "#/components/quote-editor";
@@ -63,6 +64,7 @@ export function RequestDetail(props: {
 				<StatusBadge status={request.status} />
 			</div>
 
+			<NextActionBanner request={request} />
 			<RequirementBrief request={request} />
 			{request.baselineQuote && (
 				<section className="space-y-2 rounded-lg border bg-status-review/5 p-3">

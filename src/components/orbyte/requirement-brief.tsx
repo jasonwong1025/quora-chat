@@ -1,4 +1,4 @@
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
 	Bot,
 	Check,
@@ -16,7 +16,7 @@ import {
 	UserRound,
 	X,
 } from "lucide-react";
-import { useState } from "react";
+import { createContext, useContext, useState } from "react";
 import { toast } from "sonner";
 import { useWorkspace } from "#/components/orbyte/workspace";
 import { Button } from "#/components/ui/button";
@@ -53,6 +53,51 @@ function useBriefActions() {
 }
 
 const OPEN = ["gathering", "confirming", "needs_review", "draft_ready"];
+
+/** The chat the brief came from, so each answer can show the customer's own words. */
+const ConversationCtx = createContext<string | null>(null);
+
+/** The customer message an answer was read from, shown on request. */
+function Evidence({ messageId }: { messageId: string }) {
+	const conversationId = useContext(ConversationCtx);
+	const [open, setOpen] = useState(false);
+	const chat = useQuery({
+		...orpc.conversations.get.queryOptions({
+			input: { conversationId: conversationId ?? "" },
+		}),
+		enabled: open && Boolean(conversationId),
+		staleTime: 10_000,
+	});
+	const m = chat.data?.messages.find((x) => x.id === messageId);
+	return (
+		<>
+			<button
+				type="button"
+				onClick={() => setOpen((o) => !o)}
+				aria-expanded={open}
+				className="text-[10px] text-primary hover:underline"
+			>
+				{open ? "hide source" : "source"}
+			</button>
+			{open && (
+				<span className="mt-1 block basis-full rounded-md border-l-2 border-[var(--orb-royal)] bg-muted/60 px-2 py-1 text-xs text-foreground">
+					{m ? (
+						<>
+							“{m.body}”
+							<span className="ml-1 text-[10px] text-muted-foreground">
+								customer · {clock(m.createdAt)}
+							</span>
+						</>
+					) : chat.isPending ? (
+						"Loading…"
+					) : (
+						"The original message is no longer available."
+					)}
+				</span>
+			)}
+		</>
+	);
+}
 
 /** What the AI has gathered for a request, what's still missing, and staff controls. */
 export function RequirementBrief({ request }: { request: RequestRow }) {
@@ -115,133 +160,135 @@ export function RequirementBrief({ request }: { request: RequestRow }) {
 							: "Closed.";
 
 	return (
-		<section className="space-y-3">
-			<div className="flex items-center justify-between gap-2">
-				<h3 className="text-xs font-semibold tracking-wide text-muted-foreground uppercase">
-					Requirement brief · version {request.briefVersion}
-				</h3>
+		<ConversationCtx.Provider value={request.conversationId}>
+			<section className="space-y-3">
+				<div className="flex items-center justify-between gap-2">
+					<h3 className="text-xs font-semibold tracking-wide text-muted-foreground uppercase">
+						Requirement brief · version {request.briefVersion}
+					</h3>
+					{a.requiredTotal > 0 && (
+						<span className="text-xs text-muted-foreground tabular-nums">
+							{a.requiredAnswered}/{a.requiredTotal} required
+						</span>
+					)}
+				</div>
 				{a.requiredTotal > 0 && (
-					<span className="text-xs text-muted-foreground tabular-nums">
-						{a.requiredAnswered}/{a.requiredTotal} required
-					</span>
+					<div className="h-1.5 overflow-hidden rounded-full bg-muted">
+						<div
+							className="h-full rounded-full bg-[var(--orb-royal)] transition-all"
+							style={{ width: `${pct}%` }}
+						/>
+					</div>
 				)}
-			</div>
-			{a.requiredTotal > 0 && (
-				<div className="h-1.5 overflow-hidden rounded-full bg-muted">
-					<div
-						className="h-full rounded-full bg-[var(--orb-royal)] transition-all"
-						style={{ width: `${pct}%` }}
-					/>
-				</div>
-			)}
-			{brief.revisionOf && (
-				<p className="flex items-center gap-2 rounded-md bg-status-draft/10 px-3 py-2 text-xs">
-					<RotateCcw className="size-3.5 text-status-draft" /> The customer is
-					changing a quotation that was already sent. Confirming creates a new
-					revision.
-				</p>
-			)}
-			<p className="text-sm">
-				{brief.summary || "Waiting for the first details."}
-			</p>
-			<p className="flex items-start gap-1.5 text-xs text-muted-foreground">
-				<Bot className="mt-px size-3.5 shrink-0" /> {stageText}
-			</p>
-
-			{a.items.map((view) => (
-				<ItemCard
-					key={view.item.id}
-					view={view}
-					open={open}
-					onEdit={edit}
-					busy={actions.edit.isPending}
-				/>
-			))}
-
-			{a.general.length > 0 && brief.items.length > 0 && (
-				<div className="rounded-lg border">
-					<p className="border-b px-3 py-2 text-sm font-medium">
-						About the customer
+				{brief.revisionOf && (
+					<p className="flex items-center gap-2 rounded-md bg-status-draft/10 px-3 py-2 text-xs">
+						<RotateCcw className="size-3.5 text-status-draft" /> The customer is
+						changing a quotation that was already sent. Confirming creates a new
+						revision.
 					</p>
-					<ul className="divide-y">
-						{a.general.map((q) => (
-							<AnswerRow
-								key={q.id}
-								question={q}
-								answer={brief.general[q.key]}
-								open={open}
-								onSave={(values) =>
-									edit({ kind: "answer", itemId: null, key: q.key, values })
-								}
-								onSkip={(reason) =>
-									edit({ kind: "skip", itemId: null, key: q.key, reason })
-								}
-								onClear={() =>
-									edit({ kind: "clear", itemId: null, key: q.key })
-								}
-							/>
-						))}
-					</ul>
-				</div>
-			)}
+				)}
+				<p className="text-sm">
+					{brief.summary || "Waiting for the first details."}
+				</p>
+				<p className="flex items-start gap-1.5 text-xs text-muted-foreground">
+					<Bot className="mt-px size-3.5 shrink-0" /> {stageText}
+				</p>
 
-			{brief.followUps.length > 0 && (
-				<div className="rounded-lg border">
-					<p className="border-b px-3 py-2 text-sm font-medium">Follow-ups</p>
-					<ul className="divide-y">
-						{brief.followUps.map((f) => (
-							<FollowUpRow
-								key={f.id}
-								followUp={f}
-								open={open}
-								onAnswer={(answer) =>
-									edit({ kind: "answer_follow_up", id: f.id, answer })
-								}
-								onRemove={(reason) =>
-									edit({ kind: "remove_follow_up", id: f.id, reason })
-								}
-							/>
-						))}
-					</ul>
-				</div>
-			)}
+				{a.items.map((view) => (
+					<ItemCard
+						key={view.item.id}
+						view={view}
+						open={open}
+						onEdit={edit}
+						busy={actions.edit.isPending}
+					/>
+				))}
 
-			{open && (
-				<StaffControls
-					busy={actions.ask.isPending || actions.draft.isPending}
-					canDraft={Boolean(me?.canApprove && !a.blocking.length)}
-					asking={actions.ask.isPending}
-					drafting={actions.draft.isPending}
-					drafted={drafted}
-					onAdd={(question) =>
-						edit(
-							{ kind: "add_follow_up", question },
-							"Added. The AI will ask it next.",
-						)
-					}
-					onAsk={() =>
-						run(
-							() =>
-								actions.ask.mutateAsync({
-									requestId: request.id,
-									staffId: me?.id ?? "",
-								}),
-							"Sent the next question to the customer",
-						)
-					}
-					onDraft={() =>
-						run(
-							() =>
-								actions.draft.mutateAsync({
-									requestId: request.id,
-									staffId: me?.id ?? "",
-								}),
-							"Draft created from what we know so far",
-						)
-					}
-				/>
-			)}
-		</section>
+				{a.general.length > 0 && brief.items.length > 0 && (
+					<div className="rounded-lg border">
+						<p className="border-b px-3 py-2 text-sm font-medium">
+							About the customer
+						</p>
+						<ul className="divide-y">
+							{a.general.map((q) => (
+								<AnswerRow
+									key={q.id}
+									question={q}
+									answer={brief.general[q.key]}
+									open={open}
+									onSave={(values) =>
+										edit({ kind: "answer", itemId: null, key: q.key, values })
+									}
+									onSkip={(reason) =>
+										edit({ kind: "skip", itemId: null, key: q.key, reason })
+									}
+									onClear={() =>
+										edit({ kind: "clear", itemId: null, key: q.key })
+									}
+								/>
+							))}
+						</ul>
+					</div>
+				)}
+
+				{brief.followUps.length > 0 && (
+					<div className="rounded-lg border">
+						<p className="border-b px-3 py-2 text-sm font-medium">Follow-ups</p>
+						<ul className="divide-y">
+							{brief.followUps.map((f) => (
+								<FollowUpRow
+									key={f.id}
+									followUp={f}
+									open={open}
+									onAnswer={(answer) =>
+										edit({ kind: "answer_follow_up", id: f.id, answer })
+									}
+									onRemove={(reason) =>
+										edit({ kind: "remove_follow_up", id: f.id, reason })
+									}
+								/>
+							))}
+						</ul>
+					</div>
+				)}
+
+				{open && (
+					<StaffControls
+						busy={actions.ask.isPending || actions.draft.isPending}
+						canDraft={Boolean(me?.canApprove && !a.blocking.length)}
+						asking={actions.ask.isPending}
+						drafting={actions.draft.isPending}
+						drafted={drafted}
+						onAdd={(question) =>
+							edit(
+								{ kind: "add_follow_up", question },
+								"Added. The AI will ask it next.",
+							)
+						}
+						onAsk={() =>
+							run(
+								() =>
+									actions.ask.mutateAsync({
+										requestId: request.id,
+										staffId: me?.id ?? "",
+									}),
+								"Sent the next question to the customer",
+							)
+						}
+						onDraft={() =>
+							run(
+								() =>
+									actions.draft.mutateAsync({
+										requestId: request.id,
+										staffId: me?.id ?? "",
+									}),
+								"Draft created from what we know so far",
+							)
+						}
+					/>
+				)}
+			</section>
+		</ConversationCtx.Provider>
 	);
 }
 
@@ -488,14 +535,20 @@ function AnswerRow(props: {
 								{sourceText(answer)}
 								{answer.waiverReason && ` · ${answer.waiverReason}`}
 							</span>
+							{answer.source === "customer" && answer.messageId && (
+								<Evidence messageId={answer.messageId} />
+							)}
 						</p>
 					) : (
-						<p className="text-xs text-muted-foreground italic">
+						<p className="flex flex-wrap items-baseline gap-x-2 text-xs text-muted-foreground italic">
 							{answer
 								? `${answerText(answer)} — ${answerIssue(answer, q)}`
 								: q.type === "file"
 									? "No file yet"
 									: "Not answered yet"}
+							{answer?.source === "customer" && answer.messageId && (
+								<Evidence messageId={answer.messageId} />
+							)}
 						</p>
 					)}
 				</div>
