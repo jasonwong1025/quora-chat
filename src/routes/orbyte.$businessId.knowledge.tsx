@@ -117,11 +117,8 @@ function Knowledge() {
 							className="bg-card pl-9"
 						/>
 					</div>
-					<div
-						role="radiogroup"
-						aria-label="Show documents"
-						className="flex flex-wrap gap-1.5"
-					>
+					<fieldset className="flex flex-wrap gap-1.5">
+						<legend className="sr-only">Show documents</legend>
 						{(
 							[
 								["all", `All ${all.length}`],
@@ -132,8 +129,7 @@ function Knowledge() {
 							<button
 								key={v}
 								type="button"
-								role="radio"
-								aria-checked={only === v}
+								aria-pressed={only === v}
 								onClick={() => setOnly(v)}
 								className={cn(
 									"rounded-full border px-3 py-1 text-xs",
@@ -145,7 +141,7 @@ function Knowledge() {
 								{label}
 							</button>
 						))}
-					</div>
+					</fieldset>
 					{docs.isPending ? (
 						<p className="flex items-center gap-2 text-sm text-muted-foreground">
 							<Loader2 className="size-4 animate-spin" /> Loading…
