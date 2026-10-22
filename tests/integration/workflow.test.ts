@@ -1994,3 +1994,68 @@ test("a question the model lists as an item is not added to the brief", async ()
 	});
 	assert.equal(after?.brief.items.length, 1);
 });
+
+test("a relative deadline from the model is stored as a real date", async () => {
+	const s = await scenario();
+	const db = getDb();
+	await db.insert(schema.intakeQuestions).values({
+		businessId: s.businessId,
+		scope: "business",
+		key: "needed_by",
+		label: "When do you need it by?",
+		type: "date",
+		required: true,
+	});
+	reading = {
+		language: "ms",
+		summary: "Needs it next Friday",
+		items: [
+			{
+				ref: "item",
+				productId: s.product.id,
+				match: "exact",
+				candidateProductIds: [],
+				rawText: "custom system",
+				quantity: 1,
+				removed: false,
+				reason: "Same",
+				answers: [],
+			},
+		],
+		// The model kept the customer's words instead of a date.
+		general: [
+			{
+				key: "needed_by",
+				values: ["Jumaat depan"],
+				state: "known",
+				evidenceMessageId: "LATEST",
+			},
+		],
+		followUpAnswers: [],
+		followUp: null,
+		confirmation: "none",
+		wantsChange: false,
+		quoteResponse: {
+			intent: "none",
+			resumeOn: null,
+			lostReason: null,
+			note: null,
+		},
+		customerQuestion: null,
+		reasoning: ["Deadline given"],
+	};
+	for await (const _ of handleCustomerMessage({
+		conversationId: s.conversation.id,
+		body: "Jumaat depan",
+	})) {
+		/* drain */
+	}
+	const { todayMY } = await import("../../src/server/followups");
+	const { resolveRelativeDate } = await import("../../src/lib/dates");
+	const after = await db.query.quoteRequests.findFirst({
+		where: eq(schema.quoteRequests.id, s.request.id),
+	});
+	assert.deepEqual(after?.brief.general.needed_by?.values, [
+		resolveRelativeDate("Jumaat depan", todayMY()),
+	]);
+});

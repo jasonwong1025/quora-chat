@@ -33,6 +33,7 @@ import {
 	quoteAgreementIssue,
 	quoteReviewToken,
 } from "#/lib/agreements";
+import { resolveRelativeDate } from "#/lib/dates";
 import {
 	type Assessment,
 	answerIssue,
@@ -314,6 +315,9 @@ function applyReading(
 			if (!types.has(key)) continue;
 			let clean = values.map((v) => v.trim()).filter(Boolean);
 			if (clean.length === 0) continue;
+			// "Jumaat depan" → a real date, worked out by code, not left to the model.
+			if (types.get(key) === "date")
+				clean = clean.map((v) => resolveRelativeDate(v, todayMY()) ?? v);
 			let fileMessageId: string | undefined;
 			if (types.get(key) === "file") {
 				// Only an actual file answers a file question ("will send later" doesn't).
