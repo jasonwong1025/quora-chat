@@ -23,6 +23,7 @@ import {
 	ProductThumb,
 	productImageUrl,
 } from "#/components/orbyte/product-image";
+import { QuestionList, questionsOf } from "#/components/orbyte/question-editor";
 import { PageHeader, useWorkspace } from "#/components/orbyte/workspace";
 import { Button } from "#/components/ui/button";
 import {
@@ -55,7 +56,7 @@ import {
 } from "#/components/ui/sheet";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "#/components/ui/tabs";
 import { Textarea } from "#/components/ui/textarea";
-import type { PricingRuleConfig, RequiredField } from "#/db/schema";
+import type { PricingRuleConfig } from "#/db/schema";
 import { formatMYR, parseMYR } from "#/lib/money";
 import { suggestSku, uniqueSku } from "#/lib/sku";
 import type { PricingRule, Product } from "#/lib/types";
@@ -168,6 +169,9 @@ function Products() {
 			<Tabs defaultValue="items">
 				<TabsList>
 					<TabsTrigger value="items">Item list ({products.length})</TabsTrigger>
+					<TabsTrigger value="questions">
+						Questions ({business.questions.length})
+					</TabsTrigger>
 					<TabsTrigger value="rules">
 						Pricing rules ({business.rules.length})
 					</TabsTrigger>
@@ -300,6 +304,10 @@ function Products() {
 					</p>
 				</TabsContent>
 
+				<TabsContent value="questions" className="pt-2">
+					<QuestionsTab categories={categories} onOpenProduct={setOpen} />
+				</TabsContent>
+
 				<TabsContent value="rules" className="pt-2">
 					<RuleList rules={business.rules} products={products} />
 				</TabsContent>
@@ -317,6 +325,74 @@ function Products() {
 				categories={categories}
 				onClose={() => setEditing(null)}
 			/>
+		</div>
+	);
+}
+
+/** Business-wide and per-category questions. Product questions live in each product's panel. */
+function QuestionsTab(props: {
+	categories: string[];
+	onOpenProduct: (id: string) => void;
+}) {
+	const { business } = useWorkspace();
+	return (
+		<div className="space-y-6">
+			<p className="max-w-3xl text-sm text-muted-foreground">
+				Before drafting a quote, the AI gathers answers to these questions in
+				WhatsApp, a couple at a time, in the customer's own language. It first
+				works out what they want, then asks that product's questions, then the
+				category's, then the business-wide ones, and finally sends a summary for
+				the customer to confirm.
+			</p>
+			<section className="rounded-xl border bg-card p-4">
+				<h2 className="font-semibold">Every enquiry</h2>
+				<p className="mb-3 text-xs text-muted-foreground">
+					Asked once we know what the customer wants, whatever they buy.
+				</p>
+				<QuestionList target={{ scope: "business" }} />
+			</section>
+			<div className="grid gap-4 lg:grid-cols-2">
+				{props.categories.map((category) => {
+					const inCat = business.products.filter(
+						(p) => p.category === category,
+					);
+					const own = (id: string) =>
+						business.questions.filter((q) => q.productId === id).length;
+					return (
+						<section key={category} className="rounded-xl border bg-card p-4">
+							<h2 className="font-semibold">{category}</h2>
+							<p className="mb-3 text-xs text-muted-foreground">
+								Shared by every product in this category.
+							</p>
+							<QuestionList
+								target={{ scope: "category", category }}
+								emptyText="No shared questions."
+							/>
+							<div className="mt-3 border-t pt-3">
+								<p className="mb-1.5 text-xs text-muted-foreground">
+									Product-specific questions
+								</p>
+								<ul className="flex flex-wrap gap-1.5">
+									{inCat.map((p) => (
+										<li key={p.id}>
+											<button
+												type="button"
+												onClick={() => props.onOpenProduct(p.id)}
+												className="rounded-full border px-2.5 py-1 text-xs hover:bg-muted"
+											>
+												{p.name}{" "}
+												<span className="text-muted-foreground">
+													({own(p.id)})
+												</span>
+											</button>
+										</li>
+									))}
+								</ul>
+							</div>
+						</section>
+					);
+				})}
+			</div>
 		</div>
 	);
 }
@@ -468,7 +544,11 @@ function ProductRow(props: {
 				</StopRowClick>
 			</td>
 			<td className="px-4 py-2 whitespace-nowrap tabular-nums">
-				{p.unitPriceSen > 0 ? (
+				{p.pricingMode === "custom" ? (
+					<span className="rounded-full bg-secondary px-2 py-0.5 text-[11px] font-medium text-primary">
+						Custom quote
+					</span>
+				) : p.unitPriceSen > 0 ? (
 					<>
 						{formatMYR(p.unitPriceSen)}
 						<span className="text-xs text-muted-foreground"> / {p.unit}</span>
@@ -643,9 +723,11 @@ function ProductSheet(props: {
 
 							<Section title="Selling price">
 								<p className="text-2xl font-semibold tabular-nums">
-									{p.unitPriceSen > 0
-										? formatMYR(p.unitPriceSen)
-										: "On request"}
+									{p.pricingMode === "custom"
+										? "Custom quote"
+										: p.unitPriceSen > 0
+											? formatMYR(p.unitPriceSen)
+											: "On request"}
 									<span className="text-sm font-normal text-muted-foreground">
 										{" "}
 										/ {p.unit}
@@ -679,33 +761,27 @@ function ProductSheet(props: {
 								</Section>
 							)}
 
-							<Section title="Details the customer must give">
-								{p.requiredFields.length === 0 ? (
-									<p className="text-sm text-muted-foreground">
-										Nothing extra. Quantity is enough to quote.
-									</p>
-								) : (
-									<ul className="space-y-2">
-										{p.requiredFields.map((f) => (
-											<li key={f.key} className="text-sm">
-												<p className="font-medium">{f.label}</p>
-												<div className="mt-1 flex flex-wrap gap-1">
-													{f.options ? (
-														f.options.map((o) => <Chip key={o}>{o}</Chip>)
-													) : (
-														<span className="text-xs text-muted-foreground">
-															Free text
-														</span>
-													)}
-												</div>
-											</li>
-										))}
-									</ul>
-								)}
-								<p className="mt-2 text-xs text-muted-foreground">
-									If the customer leaves one out, the AI asks for it before
-									quoting.
+							<Section title="What the AI asks before quoting">
+								<p className="mb-2 text-xs text-muted-foreground">
+									The AI gathers these in WhatsApp before a quote is drafted.
+									{p.pricingMode === "fixed"
+										? " It also asks for the quantity."
+										: " Custom-priced: staff set the price from the answers."}
 								</p>
+								<QuestionList
+									target={{ scope: "product", productId: p.id }}
+									inherited={{
+										title: `Also asked, from the ${p.category} category and business-wide`,
+										questions: [
+											...questionsOf(business.questions, {
+												scope: "category",
+												category: p.category,
+											}),
+											...questionsOf(business.questions, { scope: "business" }),
+										],
+									}}
+									emptyText="No questions of its own yet."
+								/>
 							</Section>
 
 							<Button
@@ -852,15 +928,6 @@ function Chip(props: { className?: string; children: React.ReactNode }) {
 
 // --- Add / edit dialog -----------------------------------------------------------
 
-type FieldDraft = { key: string; label: string; options: string };
-
-function toKey(label: string) {
-	return label
-		.toLowerCase()
-		.replace(/[^a-z0-9]+/g, "_")
-		.replace(/^_|_$/g, "");
-}
-
 function ProductDialog(props: {
 	product: Product | "new" | null;
 	categories: string[];
@@ -877,6 +944,7 @@ function ProductDialog(props: {
 		description: existing?.description ?? "",
 		unit: existing?.unit ?? "pc",
 		price: existing ? (existing.unitPriceSen / 100).toFixed(2) : "",
+		pricingMode: existing?.pricingMode ?? ("fixed" as "fixed" | "custom"),
 		openingStock: "0",
 		active: existing?.active ?? true,
 	});
@@ -884,13 +952,6 @@ function ProductDialog(props: {
 	const [skuTouched, setSkuTouched] = useState(Boolean(existing));
 	// undefined = unchanged, null = removed, string = new picture
 	const [image, setImage] = useState<string | null | undefined>(undefined);
-	const [fields, setFields] = useState<FieldDraft[]>(
-		existing?.requiredFields.map((f) => ({
-			key: f.key,
-			label: f.label,
-			options: f.options?.join(", ") ?? "",
-		})) ?? [],
-	);
 
 	const create = useMutation(orpc.products.create.mutationOptions());
 	const update = useMutation(orpc.products.update.mutationOptions());
@@ -909,22 +970,12 @@ function ProductDialog(props: {
 	const showOpening = !existing && form.type === "stock";
 
 	async function save() {
-		const unitPriceSen = parseMYR(form.price);
+		const unitPriceSen =
+			form.pricingMode === "custom" && !form.price.trim()
+				? 0
+				: parseMYR(form.price);
 		if (!form.name.trim() || unitPriceSen === null)
 			return toast.error("Name and a valid price are required");
-		const requiredFields: RequiredField[] = fields
-			.filter((f) => f.label.trim())
-			.map((f) => {
-				const options = f.options
-					.split(",")
-					.map((o) => o.trim())
-					.filter(Boolean);
-				return {
-					key: f.key || toKey(f.label),
-					label: f.label.trim(),
-					...(options.length ? { options } : {}),
-				};
-			});
 		const product = {
 			name: form.name.trim(),
 			sku: sku.trim().toUpperCase(),
@@ -933,7 +984,7 @@ function ProductDialog(props: {
 			description: form.description.trim(),
 			unit: form.unit.trim() || "pc",
 			unitPriceSen,
-			requiredFields,
+			pricingMode: form.pricingMode,
 			active: form.active,
 		};
 		const actor = me?.name ?? "Staff";
@@ -1112,59 +1163,43 @@ function ProductDialog(props: {
 					</p>
 				)}
 
-				<div>
-					<p className="text-sm font-medium">Details the customer must give</p>
-					<p className="mb-2 text-xs text-muted-foreground">
-						If a customer leaves one out, the AI asks for it before quoting.
-						Options are comma-separated.
-					</p>
-					<div className="space-y-2">
-						{fields.map((f, i) => (
-							<div key={`${f.key}-${i}`} className="flex gap-2">
-								<Input
-									placeholder="e.g. Paper type"
-									value={f.label}
-									onChange={(e) =>
-										setFields((fs) =>
-											fs.map((x, j) =>
-												j === i ? { ...x, label: e.target.value } : x,
-											),
-										)
-									}
-								/>
-								<Input
-									placeholder="Options (optional)"
-									value={f.options}
-									onChange={(e) =>
-										setFields((fs) =>
-											fs.map((x, j) =>
-												j === i ? { ...x, options: e.target.value } : x,
-											),
-										)
-									}
-								/>
-								<Button
-									variant="ghost"
-									size="icon"
-									className="shrink-0"
-									onClick={() =>
-										setFields((fs) => fs.filter((_, j) => j !== i))
-									}
-								>
-									<Trash2 className="size-4" />
-								</Button>
-							</div>
+				<div className="space-y-1.5">
+					<p className="text-sm text-muted-foreground">Pricing</p>
+					<div className="grid gap-2 sm:grid-cols-2">
+						{(
+							[
+								[
+									"fixed",
+									"Fixed price",
+									"Priced by the price above and the pricing rules.",
+								],
+								[
+									"custom",
+									"Custom quote",
+									"Staff set the price from the customer's answers.",
+								],
+							] as const
+						).map(([mode, title, text]) => (
+							<button
+								key={mode}
+								type="button"
+								onClick={() => set({ pricingMode: mode })}
+								className={cn(
+									"rounded-lg border p-3 text-left text-sm",
+									form.pricingMode === mode &&
+										"border-primary ring-1 ring-primary",
+								)}
+							>
+								<span className="font-medium">{title}</span>
+								<span className="block text-xs text-muted-foreground">
+									{text}
+								</span>
+							</button>
 						))}
-						<Button
-							variant="outline"
-							size="sm"
-							onClick={() =>
-								setFields((fs) => [...fs, { key: "", label: "", options: "" }])
-							}
-						>
-							<Plus className="size-4" /> Add detail
-						</Button>
 					</div>
+					<p className="text-xs text-muted-foreground">
+						Questions the AI asks are set in the product's detail panel.
+					</p>
 				</div>
 
 				<label className="flex items-center gap-2 text-sm">

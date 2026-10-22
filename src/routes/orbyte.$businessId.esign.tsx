@@ -25,6 +25,8 @@ function envelopeStatus(q: EsignRow) {
 			label: "Signed",
 			className: "bg-status-approved/15 text-status-approved",
 		};
+	if (q.status === "superseded")
+		return { label: "Replaced", className: "bg-muted text-muted-foreground" };
 	if (q.viewedAt)
 		return {
 			label: "Viewed",

@@ -17,6 +17,7 @@ const quoteStatusLabel: Record<Quote["status"], string> = {
 	approved: "Approved · awaiting signature",
 	rejected: "Rejected",
 	accepted: "Signed by customer",
+	superseded: "Replaced by a newer revision",
 };
 
 /** Render with a `key` that changes when the server version changes, to reset local edits. */

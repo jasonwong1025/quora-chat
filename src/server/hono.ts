@@ -38,6 +38,21 @@ app.get("/products/:id/image", async (c) => {
 	});
 });
 
+app.get("/messages/:id/attachment", async (c) => {
+	const message = await getDb().query.messages.findFirst({
+		where: eq(schema.messages.id, c.req.param("id")),
+		columns: { attachment: true, attachmentData: true },
+	});
+	const match = message?.attachmentData?.match(/^data:([^;]+);base64,(.+)$/);
+	if (!message?.attachment || !match) return c.notFound();
+	const name = message.attachment.name.replace(/["\\\r\n]/g, "_");
+	return c.body(Buffer.from(match[2], "base64"), 200, {
+		"Content-Type": match[1],
+		"Content-Disposition": `inline; filename="${name}"`,
+		"Cache-Control": "private, max-age=31536000, immutable",
+	});
+});
+
 app.get("/quotes/:id/pdf", async (c) => {
 	const db = getDb();
 	const quote = await db.query.quotes.findFirst({

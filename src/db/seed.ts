@@ -2,8 +2,34 @@
  * Resets the database to the synthetic demo data.
  * Run with: pnpm db:seed
  */
-import { demoBusinesses } from "../data/demo";
+import { type DemoQuestion, demoBusinesses } from "../data/demo";
 import { getDb, schema } from "./index";
+
+/** A demo question as a database row, keeping the listed order. */
+function questionRows(
+	businessId: string,
+	target:
+		| { scope: "business" }
+		| { scope: "category"; category: string }
+		| { scope: "product"; productId: string },
+	questions: DemoQuestion[],
+) {
+	return questions.map((q, position) => ({
+		businessId,
+		scope: target.scope,
+		category: target.scope === "category" ? target.category : null,
+		productId: target.scope === "product" ? target.productId : null,
+		key: q.key,
+		label: q.label,
+		type: q.type,
+		options: q.type === "yes_no" ? ["yes", "no"] : (q.options ?? []),
+		required: q.required ?? true,
+		position,
+		hint: q.hint ?? null,
+		showIf: q.showIf ?? null,
+		onQuote: q.onQuote ?? (q.type === "single" || q.type === "multi"),
+	}));
+}
 
 async function main() {
 	const db = getDb();
@@ -21,15 +47,34 @@ async function main() {
 				tagline: b.tagline,
 				phone: b.phone,
 				address: b.address,
+				openingHours: b.openingHours,
 				sstRateBps: b.sstRateBps,
 				quoteValidityDays: b.quoteValidityDays,
 			});
 			await tx
 				.insert(schema.staff)
 				.values(b.staff.map((s) => ({ ...s, businessId: b.id })));
-			await tx
-				.insert(schema.products)
-				.values(b.products.map((p) => ({ ...p, businessId: b.id })));
+			await tx.insert(schema.products).values(
+				b.products.map(({ questions: _q, ...p }) => ({
+					...p,
+					businessId: b.id,
+				})),
+			);
+			const questions = [
+				...questionRows(b.id, { scope: "business" }, b.businessQuestions),
+				...Object.entries(b.categoryQuestions).flatMap(([category, qs]) =>
+					questionRows(b.id, { scope: "category", category }, qs),
+				),
+				...b.products.flatMap((p) =>
+					questionRows(
+						b.id,
+						{ scope: "product", productId: p.id },
+						p.questions ?? [],
+					),
+				),
+			];
+			if (questions.length)
+				await tx.insert(schema.intakeQuestions).values(questions);
 			await tx
 				.insert(schema.pricingRules)
 				.values(b.rules.map((r) => ({ ...r, businessId: b.id })));

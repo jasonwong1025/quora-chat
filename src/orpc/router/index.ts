@@ -14,9 +14,13 @@ import { z } from "zod";
 import { getDemoBusiness } from "#/data/demo";
 import { getDb, schema } from "#/db";
 import { suggestSku, uniqueSku } from "#/lib/sku";
+import { suggestQuestions } from "#/server/ai";
 import { emitOrbyteEvent } from "#/server/orbyte";
 import {
+	askNow,
 	decideQuote,
+	draftNow,
+	editBrief,
 	editDraftQuote,
 	handleCustomerMessage,
 	markQuoteViewed,
@@ -26,6 +30,11 @@ import {
 } from "#/server/workflow";
 
 const businessInput = z.object({ businessId: z.string() });
+
+// Attachment bytes are only served from /api/messages/:id/attachment, never in lists.
+const { attachmentData: _attachmentData, ...messageColumns } = getTableColumns(
+	schema.messages,
+);
 
 function fail(err: unknown): never {
 	throw new ORPCError("BAD_REQUEST", {
@@ -46,7 +55,7 @@ const getBusiness = os.input(businessInput).handler(async ({ input }) => {
 	});
 	if (!business) throw new ORPCError("NOT_FOUND");
 	const { image, ...productColumns } = getTableColumns(schema.products);
-	const [products, rules, staff] = await Promise.all([
+	const [products, rules, staff, questions] = await Promise.all([
 		db
 			.select({
 				...productColumns,
@@ -64,12 +73,21 @@ const getBusiness = os.input(businessInput).handler(async ({ input }) => {
 			.select()
 			.from(schema.staff)
 			.where(eq(schema.staff.businessId, business.id)),
+		db
+			.select()
+			.from(schema.intakeQuestions)
+			.where(eq(schema.intakeQuestions.businessId, business.id))
+			.orderBy(
+				asc(schema.intakeQuestions.position),
+				asc(schema.intakeQuestions.createdAt),
+			),
 	]);
 	return {
 		...business,
 		products,
 		rules,
 		staff,
+		questions,
 		sampleMessages: getDemoBusiness(business.id)?.sampleMessages ?? [],
 	};
 });
@@ -107,6 +125,7 @@ const getConversation = os
 		const messages = await db.query.messages.findMany({
 			where: eq(schema.messages.conversationId, conversation.id),
 			orderBy: asc(schema.messages.createdAt),
+			columns: { attachmentData: false },
 		});
 		const quoteIds = messages.flatMap((m) => (m.quoteId ? [m.quoteId] : []));
 		const quotes = quoteIds.length
@@ -128,9 +147,32 @@ const getConversation = os
 	});
 
 /** Streams workflow progress so the UI can show each step as it happens. */
+const attachmentInput = z
+	.object({
+		name: z.string().min(1).max(120),
+		mime: z
+			.string()
+			.regex(
+				/^(image\/(png|jpeg|webp)|application\/pdf|application\/vnd\.openxmlformats-officedocument\.(spreadsheetml\.sheet|wordprocessingml\.document))$/,
+				"Send a photo, PDF, Word or Excel file",
+			),
+		dataUrl: z.string().max(6_000_000, "File is too large (max ~4 MB)"),
+	})
+	.refine((a) => a.dataUrl.startsWith(`data:${a.mime};base64,`), {
+		message: "File data does not match its type",
+	});
+
 const sendMessage = os
 	.input(
-		z.object({ conversationId: z.string(), body: z.string().min(1).max(2000) }),
+		z
+			.object({
+				conversationId: z.string(),
+				body: z.string().max(2000),
+				attachment: attachmentInput.nullish(),
+			})
+			.refine((m) => m.body.trim() || m.attachment, {
+				message: "Type a message or attach a file",
+			}),
 	)
 	.handler(async function* ({ input }) {
 		yield* handleCustomerMessage(input);
@@ -280,7 +322,7 @@ const whatsappChats = os
 		const ids = conversations.map((c) => c.id);
 		const messages = ids.length
 			? await db
-					.select()
+					.select(messageColumns)
 					.from(schema.messages)
 					.where(inArray(schema.messages.conversationId, ids))
 					.orderBy(asc(schema.messages.createdAt))
@@ -336,7 +378,7 @@ const inboxList = os.input(businessInput).handler(async ({ input }) => {
 	if (ids.length === 0) return [];
 	const [messages, requests, staff] = await Promise.all([
 		db
-			.select()
+			.select(messageColumns)
 			.from(schema.messages)
 			.where(inArray(schema.messages.conversationId, ids))
 			.orderBy(asc(schema.messages.createdAt)),
@@ -389,12 +431,6 @@ const reply = os
 
 // --- Orbyte: Products module -----------------------------------------------------
 
-const requiredFieldSchema = z.object({
-	key: z.string().min(1),
-	label: z.string().min(1),
-	options: z.array(z.string()).optional(),
-});
-
 const productInput = z.object({
 	sku: z.string().trim().max(40),
 	type: z.enum(["stock", "service"]),
@@ -403,7 +439,7 @@ const productInput = z.object({
 	description: z.string(),
 	unit: z.string().min(1),
 	unitPriceSen: z.number().int().nonnegative(),
-	requiredFields: z.array(requiredFieldSchema),
+	pricingMode: z.enum(["fixed", "custom"]),
 	active: z.boolean(),
 });
 
@@ -647,7 +683,7 @@ const esignList = os.input(businessInput).handler(async ({ input }) => {
 		.where(
 			and(
 				eq(schema.quotes.businessId, input.businessId),
-				inArray(schema.quotes.status, ["approved", "accepted"]),
+				inArray(schema.quotes.status, ["approved", "accepted", "superseded"]),
 			),
 		)
 		.orderBy(desc(schema.quotes.decidedAt));
@@ -697,6 +733,345 @@ const sign = os
 	)
 	.handler(({ input }) => signQuote(input).catch(fail));
 
+// --- Orbyte: Preset questions ------------------------------------------------------
+
+const questionTypes = [
+	"text",
+	"number",
+	"date",
+	"single",
+	"multi",
+	"yes_no",
+	"file",
+] as const;
+
+const questionFields = z.object({
+	key: z
+		.string()
+		.min(1)
+		.max(40)
+		.regex(/^[a-z0-9_]+$/, "Key: lowercase letters, numbers and _ only"),
+	label: z.string().trim().min(1).max(200),
+	type: z.enum(questionTypes),
+	options: z.array(z.string().trim().min(1).max(80)).max(12),
+	required: z.boolean(),
+	hint: z.string().trim().max(300).nullable(),
+	showIf: z
+		.object({ key: z.string().min(1), equals: z.string().min(1) })
+		.nullable(),
+	onQuote: z.boolean().default(false),
+});
+
+const questionTarget = z.discriminatedUnion("scope", [
+	z.object({ scope: z.literal("business") }),
+	z.object({ scope: z.literal("category"), category: z.string().min(1) }),
+	z.object({ scope: z.literal("product"), productId: z.string().min(1) }),
+]);
+
+type QuestionFields = z.infer<typeof questionFields>;
+
+function checkQuestion(q: QuestionFields) {
+	if ((q.type === "single" || q.type === "multi") && q.options.length < 2)
+		fail(new Error(`"${q.label}" needs at least 2 options`));
+	if (q.type !== "single" && q.type !== "multi") q.options = [];
+	if (q.type === "yes_no") q.options = ["yes", "no"];
+}
+
+function targetWhere(businessId: string, t: z.infer<typeof questionTarget>) {
+	const q = schema.intakeQuestions;
+	return and(
+		eq(q.businessId, businessId),
+		eq(q.scope, t.scope),
+		t.scope === "category" ? eq(q.category, t.category) : undefined,
+		t.scope === "product" ? eq(q.productId, t.productId) : undefined,
+	);
+}
+
+const addQuestions = os
+	.input(
+		businessInput.extend({
+			target: questionTarget,
+			questions: z.array(questionFields).min(1).max(20),
+			source: z.enum(["staff", "ai"]).default("staff"),
+			actor: z.string(),
+		}),
+	)
+	.handler(async ({ input }) => {
+		const db = getDb();
+		const t = input.target;
+		if (t.scope === "product") {
+			const p = await db.query.products.findFirst({
+				where: and(
+					eq(schema.products.id, t.productId),
+					eq(schema.products.businessId, input.businessId),
+				),
+			});
+			if (!p) throw new ORPCError("NOT_FOUND");
+		}
+		const existing = await db
+			.select()
+			.from(schema.intakeQuestions)
+			.where(targetWhere(input.businessId, t));
+		const keys = new Set(existing.map((q) => q.key));
+		let position = Math.max(0, ...existing.map((q) => q.position + 1));
+		const rows = input.questions.map((q) => {
+			checkQuestion(q);
+			if (keys.has(q.key))
+				fail(new Error(`A question with key "${q.key}" already exists here`));
+			keys.add(q.key);
+			return {
+				...q,
+				businessId: input.businessId,
+				scope: t.scope,
+				category: t.scope === "category" ? t.category : null,
+				productId: t.scope === "product" ? t.productId : null,
+				position: position++,
+				source: input.source,
+			};
+		});
+		const inserted = await db
+			.insert(schema.intakeQuestions)
+			.values(rows)
+			.returning();
+		await emitOrbyteEvent(db, {
+			businessId: input.businessId,
+			type: "product.updated",
+			actor: input.actor,
+			summary: `${input.actor} added ${inserted.length} preset question${inserted.length === 1 ? "" : "s"}${input.source === "ai" ? " (suggested by AI)" : ""}`,
+		});
+		return inserted;
+	});
+
+async function loadQuestion(questionId: string) {
+	const row = await getDb().query.intakeQuestions.findFirst({
+		where: eq(schema.intakeQuestions.id, questionId),
+	});
+	if (!row) throw new ORPCError("NOT_FOUND");
+	return row;
+}
+
+const updateQuestion = os
+	.input(z.object({ questionId: z.string(), question: questionFields }))
+	.handler(async ({ input }) => {
+		const db = getDb();
+		const current = await loadQuestion(input.questionId);
+		const q = input.question;
+		checkQuestion(q);
+		if (q.key !== current.key) {
+			const clash = await db.query.intakeQuestions.findFirst({
+				where: and(
+					targetWhere(current.businessId, {
+						scope: current.scope,
+						category: current.category ?? "",
+						productId: current.productId ?? "",
+					} as z.infer<typeof questionTarget>),
+					eq(schema.intakeQuestions.key, q.key),
+				),
+			});
+			if (clash) fail(new Error(`Key "${q.key}" is already used here`));
+		}
+		const [row] = await db
+			.update(schema.intakeQuestions)
+			.set(q)
+			.where(eq(schema.intakeQuestions.id, current.id))
+			.returning();
+		return row;
+	});
+
+const deleteQuestion = os
+	.input(z.object({ questionId: z.string() }))
+	.handler(async ({ input }) => {
+		await getDb()
+			.delete(schema.intakeQuestions)
+			.where(eq(schema.intakeQuestions.id, input.questionId));
+		return { ok: true };
+	});
+
+/** Swaps a question with its neighbour in the same list. */
+const moveQuestion = os
+	.input(
+		z.object({ questionId: z.string(), direction: z.enum(["up", "down"]) }),
+	)
+	.handler(async ({ input }) => {
+		const db = getDb();
+		const current = await loadQuestion(input.questionId);
+		const siblings = (
+			await db
+				.select()
+				.from(schema.intakeQuestions)
+				.where(
+					targetWhere(current.businessId, {
+						scope: current.scope,
+						category: current.category ?? "",
+						productId: current.productId ?? "",
+					} as z.infer<typeof questionTarget>),
+				)
+		).sort(
+			(a, b) =>
+				a.position - b.position ||
+				a.createdAt.getTime() - b.createdAt.getTime(),
+		);
+		const i = siblings.findIndex((q) => q.id === current.id);
+		const j = input.direction === "up" ? i - 1 : i + 1;
+		if (j < 0 || j >= siblings.length) return { ok: true };
+		const order = [...siblings];
+		[order[i], order[j]] = [order[j], order[i]];
+		await Promise.all(
+			order.map((q, position) =>
+				db
+					.update(schema.intakeQuestions)
+					.set({ position })
+					.where(eq(schema.intakeQuestions.id, q.id)),
+			),
+		);
+		return { ok: true };
+	});
+
+/** AI proposes questions for a product, category or the whole business. Nothing is saved. */
+const suggestPresetQuestions = os
+	.input(businessInput.extend({ target: questionTarget }))
+	.handler(async ({ input }) => {
+		const db = getDb();
+		const business = await db.query.businesses.findFirst({
+			where: eq(schema.businesses.id, input.businessId),
+		});
+		if (!business) throw new ORPCError("NOT_FOUND");
+		const [products, rules, questions] = await Promise.all([
+			db
+				.select()
+				.from(schema.products)
+				.where(eq(schema.products.businessId, business.id)),
+			db
+				.select()
+				.from(schema.pricingRules)
+				.where(eq(schema.pricingRules.businessId, business.id)),
+			db
+				.select()
+				.from(schema.intakeQuestions)
+				.where(eq(schema.intakeQuestions.businessId, business.id)),
+		]);
+		const t = input.target;
+		const ruleKeysFor = (ids: string[]) => [
+			...new Set(
+				rules
+					.filter((r) => r.productId && ids.includes(r.productId))
+					.flatMap((r) =>
+						"when" in r.config && r.config.when && "field" in r.config.when
+							? [r.config.when.field]
+							: [],
+					),
+			),
+		];
+		const shared = (category: string) =>
+			questions.filter(
+				(q) => q.scope === "category" && q.category === category,
+			);
+		const general = questions.filter((q) => q.scope === "business");
+		const pick = (qs: typeof questions) =>
+			qs.map((q) => ({ key: q.key, label: q.label }));
+
+		try {
+			if (t.scope === "product") {
+				const p = products.find((x) => x.id === t.productId);
+				if (!p) throw new ORPCError("NOT_FOUND");
+				return await suggestQuestions({
+					businessName: business.name,
+					industry: business.industry,
+					target: {
+						kind: "product",
+						name: p.name,
+						description: p.description,
+						category: p.category,
+						unit: p.unit,
+						pricing: p.pricingMode,
+					},
+					existing: pick([
+						...questions.filter((q) => q.productId === p.id),
+						...shared(p.category),
+						...general,
+					]),
+					ruleKeys: ruleKeysFor([p.id]),
+				});
+			}
+			if (t.scope === "category") {
+				const inCat = products.filter((x) => x.category === t.category);
+				return await suggestQuestions({
+					businessName: business.name,
+					industry: business.industry,
+					target: {
+						kind: "category",
+						category: t.category,
+						products: inCat.map((x) => x.name),
+					},
+					existing: pick([...shared(t.category), ...general]),
+					ruleKeys: [],
+				});
+			}
+			return await suggestQuestions({
+				businessName: business.name,
+				industry: business.industry,
+				target: { kind: "business", products: products.map((x) => x.name) },
+				existing: pick(general),
+				ruleKeys: [],
+			});
+		} catch (err) {
+			if (err instanceof ORPCError) throw err;
+			fail(err);
+		}
+	});
+
+// --- Orbyte: Requirement brief -----------------------------------------------------
+
+const briefEdit = z.discriminatedUnion("kind", [
+	z.object({
+		kind: z.literal("answer"),
+		itemId: z.string().nullable(),
+		key: z.string(),
+		values: z.array(z.string().max(500)).min(1),
+	}),
+	z.object({
+		kind: z.literal("skip"),
+		itemId: z.string().nullable(),
+		key: z.string(),
+	}),
+	z.object({
+		kind: z.literal("clear"),
+		itemId: z.string().nullable(),
+		key: z.string(),
+	}),
+	z.object({
+		kind: z.literal("quantity"),
+		itemId: z.string(),
+		quantity: z.number().positive().nullable(),
+	}),
+	z.object({
+		kind: z.literal("product"),
+		itemId: z.string(),
+		productId: z.string(),
+	}),
+	z.object({ kind: z.literal("add_follow_up"), question: z.string().max(300) }),
+	z.object({ kind: z.literal("remove_follow_up"), id: z.string() }),
+	z.object({
+		kind: z.literal("answer_follow_up"),
+		id: z.string(),
+		answer: z.string().max(500),
+	}),
+]);
+
+const editRequestBrief = os
+	.input(
+		z.object({ requestId: z.string(), staffId: z.string(), edit: briefEdit }),
+	)
+	.handler(({ input }) => editBrief(input).catch(fail));
+
+const askRequestNow = os
+	.input(z.object({ requestId: z.string(), staffId: z.string() }))
+	.handler(({ input }) => askNow(input).catch(fail));
+
+const draftRequestNow = os
+	.input(z.object({ requestId: z.string(), staffId: z.string() }))
+	.handler(({ input }) => draftNow(input).catch(fail));
+
 export default {
 	businesses: { list: listBusinesses, get: getBusiness },
 	conversations: {
@@ -717,7 +1092,19 @@ export default {
 	},
 	rules: { delete: deleteRule },
 	esign: { list: esignList, markViewed, sign },
-	requests: { list: listRequests },
+	requests: {
+		list: listRequests,
+		editBrief: editRequestBrief,
+		askNow: askRequestNow,
+		draftNow: draftRequestNow,
+	},
+	questions: {
+		add: addQuestions,
+		update: updateQuestion,
+		delete: deleteQuestion,
+		move: moveQuestion,
+		suggest: suggestPresetQuestions,
+	},
 	quotes: { get: getQuote, update: updateQuote, decide },
 	activity: { list: listActivity },
 };

@@ -187,7 +187,7 @@ function Home() {
 												)}
 											</p>
 											<p className="truncate text-xs text-muted-foreground">
-												{x.extracted.summary}
+												{x.brief.summary || "New enquiry"}
 											</p>
 										</div>
 										<StatusBadge status={x.status} />

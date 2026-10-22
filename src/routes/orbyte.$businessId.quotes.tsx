@@ -26,7 +26,9 @@ const filters = {
 	waiting: {
 		label: "Waiting on customer",
 		test: (r: RequestRow) =>
-			r.status === "needs_clarification" || r.quote?.status === "approved",
+			r.status === "gathering" ||
+			r.status === "confirming" ||
+			r.quote?.status === "approved",
 	},
 	signed: {
 		label: "Signed",
@@ -103,7 +105,7 @@ function Quotes() {
 										</span>
 									</div>
 									<p className="truncate text-xs text-muted-foreground">
-										{x.customerName} · {x.extracted.summary}
+										{x.customerName} · {x.brief.summary || "New enquiry"}
 									</p>
 									<div className="mt-1.5 flex items-center gap-2">
 										<StatusBadge

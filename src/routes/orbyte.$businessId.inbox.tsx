@@ -306,7 +306,31 @@ function Conversation({ row, onBack }: { row: InboxRow; onBack: () => void }) {
 												: "Sent for signature"}
 										</a>
 									)}
-									<p className="whitespace-pre-wrap">{m.body}</p>
+									{m.attachment &&
+										(m.attachment.mime.startsWith("image/") ? (
+											<a
+												href={`/api/messages/${m.id}/attachment`}
+												target="_blank"
+												rel="noreferrer"
+												className="mb-1.5 block"
+											>
+												<img
+													src={`/api/messages/${m.id}/attachment`}
+													alt={m.attachment.name}
+													className="max-h-60 rounded-lg object-cover"
+												/>
+											</a>
+										) : (
+											<a
+												href={`/api/messages/${m.id}/attachment`}
+												target="_blank"
+												rel="noreferrer"
+												className="mb-1.5 flex items-center gap-2 rounded-lg bg-muted px-2.5 py-2 text-xs hover:bg-muted/70"
+											>
+												<FileText className="size-4" /> {m.attachment.name}
+											</a>
+										))}
+									{m.body && <p className="whitespace-pre-wrap">{m.body}</p>}
 									<p
 										className={cn(
 											"mt-0.5 text-right text-[10px]",

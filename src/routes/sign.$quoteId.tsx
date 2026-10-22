@@ -89,6 +89,11 @@ function SignPage() {
 							</p>
 						</div>
 					</div>
+				) : q.status === "superseded" ? (
+					<p className="rounded-xl border bg-card p-5 text-sm text-muted-foreground">
+						This version was replaced by an updated quotation. Please open the
+						latest one from WhatsApp.
+					</p>
 				) : (
 					<p className="rounded-xl border bg-card p-5 text-sm text-muted-foreground">
 						This quotation is not open for signing.

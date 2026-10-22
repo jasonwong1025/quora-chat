@@ -1,8 +1,12 @@
 import { cn } from "#/lib/utils";
 
 const styles = {
-	needs_clarification: {
-		label: "Needs info",
+	gathering: {
+		label: "Gathering info",
+		className: "bg-status-clarify/20 text-status-clarify",
+	},
+	confirming: {
+		label: "Confirming",
 		className: "bg-status-clarify/20 text-status-clarify",
 	},
 	needs_review: {
@@ -29,11 +33,15 @@ const styles = {
 		label: "Signed",
 		className: "bg-status-approved/15 text-status-approved",
 	},
+	superseded: {
+		label: "Replaced",
+		className: "bg-muted text-muted-foreground",
+	},
 } as const;
 
 /** Badge status for a quote row (draft / approved / rejected / accepted). */
 export function quoteBadge(
-	status: "draft" | "approved" | "rejected" | "accepted",
+	status: "draft" | "approved" | "rejected" | "accepted" | "superseded",
 ): RequestStatus {
 	return status === "draft"
 		? "draft_ready"

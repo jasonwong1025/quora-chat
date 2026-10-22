@@ -4,6 +4,7 @@ import {
 	Check,
 	CheckCheck,
 	Clock3,
+	FileText,
 	Lock,
 	Mic,
 	MoreVertical,
@@ -13,9 +14,11 @@ import {
 	SendHorizontal,
 	Smile,
 	Video,
+	X,
 } from "lucide-react";
 import { Fragment, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
+import { fileToThumb } from "#/components/orbyte/product-image";
 import { clock, dayLabel } from "#/lib/time";
 import type { ConversationDetail, WhatsappChat } from "#/lib/types";
 import { cn } from "#/lib/utils";
@@ -24,6 +27,30 @@ import { client, orpc } from "#/orpc/client";
 import { WaAvatar } from "./avatar";
 
 type QuoteInfo = ConversationDetail["quotes"][number];
+type Message = ConversationDetail["messages"][number];
+type Outgoing = { name: string; mime: string; dataUrl: string };
+
+const MAX_FILE = 4 * 1024 * 1024;
+
+/** Photos are shrunk before sending; documents go as they are (up to 4 MB). */
+async function readAttachment(file: File): Promise<Outgoing> {
+	if (file.type.startsWith("image/")) {
+		const dataUrl = await fileToThumb(file, 1280);
+		return {
+			name: `${file.name.replace(/\.[^.]+$/, "")}.jpg`,
+			mime: "image/jpeg",
+			dataUrl,
+		};
+	}
+	if (file.size > MAX_FILE) throw new Error("File is too large (max 4 MB)");
+	const dataUrl = await new Promise<string>((resolve, reject) => {
+		const reader = new FileReader();
+		reader.onload = () => resolve(String(reader.result));
+		reader.onerror = () => reject(new Error("Could not read the file"));
+		reader.readAsDataURL(file);
+	});
+	return { name: file.name, mime: file.type, dataUrl };
+}
 
 export function ChatWindow(props: {
 	chat: WhatsappChat;
@@ -37,7 +64,11 @@ export function ChatWindow(props: {
 	const business = chat.business;
 	const queryClient = useQueryClient();
 	const [conversationId, setConversationId] = useState(props.conversationId);
-	const [pending, setPending] = useState<string | null>(null);
+	const [pending, setPending] = useState<{
+		body: string;
+		file: Outgoing | null;
+	} | null>(null);
+	const [file, setFile] = useState<Outgoing | null>(null);
 	const [typing, setTyping] = useState(false);
 	const [draft, setDraft] = useState("");
 
@@ -70,8 +101,8 @@ export function ChatWindow(props: {
 		if (conversationId) onSeen(conversationId);
 	}, [messages.length, typing, pending, conversationId]);
 
-	async function send(body: string) {
-		setPending(body);
+	async function send(body: string, attachment: Outgoing | null = null) {
+		setPending({ body, file: attachment });
 		try {
 			let id = conversationId;
 			if (!id) {
@@ -86,6 +117,7 @@ export function ChatWindow(props: {
 			const stream = await client.conversations.send({
 				conversationId: id,
 				body,
+				attachment,
 			});
 			for await (const step of stream) {
 				if (step.step === "received") {
@@ -204,6 +236,7 @@ export function ChatWindow(props: {
 										time={clock(m.createdAt)}
 										ticks={out ? (read ? "read" : "delivered") : undefined}
 									>
+										{m.attachment && <AttachmentView message={m} />}
 										{m.body}
 									</Bubble>
 								)}
@@ -213,7 +246,12 @@ export function ChatWindow(props: {
 
 					{pending && (
 						<Bubble out first time={clock(new Date())} ticks="pending">
-							{pending}
+							{pending.file && (
+								<span className="mb-1 flex items-center gap-2 rounded-md bg-black/20 p-2 text-sm">
+									<FileText className="size-4" /> {pending.file.name}
+								</span>
+							)}
+							{pending.body}
 						</Bubble>
 					)}
 
@@ -230,20 +268,69 @@ export function ChatWindow(props: {
 				</div>
 			</div>
 
+			{file && (
+				<div className="flex items-center gap-3 bg-[var(--wa-app)] px-6 pt-2">
+					<div className="flex min-w-0 items-center gap-2 rounded-lg bg-[var(--wa-in)] px-3 py-2 text-sm">
+						{file.mime.startsWith("image/") ? (
+							<img
+								src={file.dataUrl}
+								alt=""
+								className="size-10 rounded object-cover"
+							/>
+						) : (
+							<FileText className="size-5 text-[var(--wa-muted)]" />
+						)}
+						<span className="truncate">{file.name}</span>
+						<button
+							type="button"
+							onClick={() => setFile(null)}
+							className="rounded-full p-1 text-[var(--wa-muted)] hover:bg-[var(--wa-hover)]"
+						>
+							<X className="size-4" />
+							<span className="sr-only">Remove attachment</span>
+						</button>
+					</div>
+					<span className="text-xs text-[var(--wa-muted)]">
+						Add a caption, or just send
+					</span>
+				</div>
+			)}
 			<form
 				className="flex items-end gap-1 bg-[var(--wa-app)] px-4 pt-1 pb-3"
 				onSubmit={(e) => {
 					e.preventDefault();
 					const body = draft.trim();
-					if (!body || busy) return;
+					if ((!body && !file) || busy) return;
 					setDraft("");
-					send(body);
+					setFile(null);
+					send(body, file);
 				}}
 			>
 				<div className="flex min-h-[52px] flex-1 items-end gap-1 rounded-[26px] bg-[var(--wa-in)] px-2 py-1.5">
-					<span className="rounded-full p-2 text-[var(--wa-text)]">
+					<label
+						title="Attach a photo or document"
+						className="cursor-pointer rounded-full p-2 text-[var(--wa-text)] hover:bg-[var(--wa-hover)]"
+					>
 						<Plus className="size-6" />
-					</span>
+						<span className="sr-only">Attach a photo or document</span>
+						<input
+							type="file"
+							accept="image/*,application/pdf,.docx,.xlsx"
+							className="sr-only"
+							onChange={async (e) => {
+								const picked = e.target.files?.[0];
+								e.target.value = "";
+								if (!picked) return;
+								try {
+									setFile(await readAttachment(picked));
+								} catch (err) {
+									toast.error(
+										err instanceof Error ? err.message : "Could not attach",
+									);
+								}
+							}}
+						/>
+					</label>
 					<span className="rounded-full p-2 text-[var(--wa-text)]">
 						<Smile className="size-6" />
 					</span>
@@ -260,7 +347,7 @@ export function ChatWindow(props: {
 						placeholder="Type a message"
 						className="max-h-32 min-h-10 flex-1 resize-none bg-transparent py-2 text-[15px] outline-none placeholder:text-[var(--wa-muted)]"
 					/>
-					{draft.trim() ? (
+					{draft.trim() || file ? (
 						<button
 							type="submit"
 							disabled={busy}
@@ -335,6 +422,47 @@ function Bubble(props: {
 				)}
 			</span>
 		</div>
+	);
+}
+
+function AttachmentView({ message }: { message: Message }) {
+	const a = message.attachment;
+	if (!a) return null;
+	const url = `/api/messages/${message.id}/attachment`;
+	if (a.mime.startsWith("image/")) {
+		return (
+			<a
+				href={url}
+				target="_blank"
+				rel="noreferrer"
+				className="-mx-1 mb-1 block"
+			>
+				<img
+					src={url}
+					alt={a.name}
+					className="max-h-72 w-full max-w-72 rounded-md object-cover"
+				/>
+			</a>
+		);
+	}
+	const ext = a.name.split(".").pop()?.toUpperCase().slice(0, 4) ?? "FILE";
+	return (
+		<a
+			href={url}
+			target="_blank"
+			rel="noreferrer"
+			className="mb-1.5 flex min-w-60 items-center gap-3 rounded-md bg-black/25 p-3 hover:bg-black/35"
+		>
+			<span className="flex h-11 w-9 shrink-0 items-end justify-center rounded-sm bg-[#5b8def] pb-1 text-[9px] font-bold text-white">
+				{ext}
+			</span>
+			<span className="min-w-0">
+				<span className="block truncate">{a.name}</span>
+				<span className="block text-xs text-white/60">
+					{Math.max(1, Math.round(a.size / 1024))} KB · {ext}
+				</span>
+			</span>
+		</a>
 	);
 }
 

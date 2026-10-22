@@ -1,22 +1,24 @@
 /**
- * Deterministic pricing. The AI only extracts what the customer asked for;
+ * Deterministic pricing. The AI only gathers what the customer asked for;
  * every number on a quote comes from the business's own catalog and rules.
  */
 import type {
-	ExtractedRequest,
+	Answer,
+	Brief,
 	Flag,
 	LineItem,
 	PricingRuleConfig,
-	RequiredField,
 } from "#/db/schema";
+import { isVisible, type Question, questionsFor } from "#/lib/intake";
 import { formatMYR } from "#/lib/money";
 
 export type CatalogProduct = {
 	id: string;
+	category: string;
 	name: string;
 	unit: string;
 	unitPriceSen: number;
-	requiredFields: RequiredField[];
+	pricingMode: "fixed" | "custom";
 	/** Stock items are checked against what is available (on hand − reserved). */
 	type?: "stock" | "service";
 	stockOnHand?: number;
@@ -35,13 +37,13 @@ export type CatalogRule = {
 	config: PricingRuleConfig;
 };
 
-export type Outcome = "needs_clarification" | "needs_review" | "draft_ready";
+export type Outcome = "needs_review" | "draft_ready";
 
 export type PricingResult = {
 	outcome: Outcome;
 	flags: Flag[];
 	lineItems: LineItem[];
-	/** How each priced line was worked out, in plain words. */
+	/** How each line was worked out, in plain words. */
 	explain: { itemIndex: number; lines: string[] }[];
 };
 
@@ -49,85 +51,90 @@ function rulesFor(rules: CatalogRule[], productId: string) {
 	return rules.filter((r) => r.productId === null || r.productId === productId);
 }
 
+/** Rule conditions match any of the answer's values (multi-choice can have several). */
 function matchesWhen(
 	when: { field: string; equals: string },
-	fields: Record<string, string>,
+	answers: Record<string, Answer>,
 ) {
-	return fields[when.field]?.toLowerCase() === when.equals.toLowerCase();
+	const a = answers[when.field];
+	if (!a || a.source === "skipped") return false;
+	return a.values.some(
+		(v) => v.trim().toLowerCase() === when.equals.trim().toLowerCase(),
+	);
 }
 
-export function priceRequest(
-	request: ExtractedRequest,
+/** Answers marked "show on quotation" make the line description, e.g. "Flyer A5 (157gsm, double)". */
+function lineDetails(
+	product: CatalogProduct,
+	answers: Record<string, Answer>,
+	questions: Question[],
+) {
+	return questionsFor(product, questions)
+		.filter((q) => q.onQuote && isVisible(q, answers))
+		.map((q) => answers[q.key])
+		.filter((a): a is Answer => a !== undefined && a.source !== "skipped")
+		.flatMap((a) => a.values)
+		.join(", ");
+}
+
+/**
+ * Turns a confirmed brief into quote lines. Fixed-price items are priced by the
+ * rules; custom-priced and unknown items are left for staff to price.
+ */
+export function priceBrief(
+	brief: Brief,
 	products: CatalogProduct[],
 	rules: CatalogRule[],
+	questions: Question[],
 ): PricingResult {
 	const byId = new Map(products.map((p) => [p.id, p]));
 	const flags: Flag[] = [];
 	const lineItems: LineItem[] = [];
 	const explain: PricingResult["explain"] = [];
 
-	if (request.items.length === 0) {
-		flags.push({
-			kind: "missing_info",
-			message: "Customer has not said what they need yet.",
-		});
-	}
-
-	request.items.forEach((item, itemIndex) => {
-		if (item.match === "ambiguous") {
-			flags.push({
-				kind: "missing_info",
-				itemIndex,
-				field: "product",
-				message: `"${item.rawText}" could be several products.`,
-				options: item.candidateProductIds
-					.map((id) => byId.get(id)?.name)
-					.filter((n): n is string => Boolean(n)),
-			});
-			return;
-		}
-
+	brief.items.forEach((item, itemIndex) => {
 		const product = item.productId ? byId.get(item.productId) : undefined;
-		if (item.match === "none" || !product) {
+		if (!product || item.match !== "exact") {
 			flags.push({
 				kind: "unknown_item",
 				itemIndex,
-				message: `"${item.rawText}" is not in the catalog.`,
+				message:
+					item.match === "ambiguous"
+						? `"${item.rawText}": customer did not pick between the options.`
+						: `"${item.rawText}" is not in the catalog.`,
 			});
 			return;
 		}
 
-		let missing = false;
-		if (item.quantity === null || item.quantity <= 0) {
-			missing = true;
-			flags.push({
-				kind: "missing_info",
-				itemIndex,
-				field: "quantity",
-				message: `How many ${product.unit} of ${product.name}?`,
-			});
-		}
-		for (const f of product.requiredFields) {
-			const value = item.fields[f.key];
-			const valid =
-				value !== undefined &&
-				value !== "" &&
-				(!f.options ||
-					f.options.some((o) => o.toLowerCase() === value.toLowerCase()));
-			if (!valid) {
-				missing = true;
-				flags.push({
-					kind: "missing_info",
-					itemIndex,
-					field: f.key,
-					message: `${product.name}: ${f.label} not given.`,
-					options: f.options,
-				});
-			}
-		}
-		if (missing || item.quantity === null) return;
+		const details = lineDetails(product, item.answers, questions);
+		const description = details ? `${product.name} (${details})` : product.name;
 
-		const qty = item.quantity;
+		if (product.pricingMode === "custom") {
+			const qty = item.quantity && item.quantity > 0 ? item.quantity : 1;
+			flags.push({
+				kind: "custom_pricing",
+				itemIndex,
+				message: `${product.name}: custom-priced. Set the price from the requirement brief.`,
+			});
+			explain.push({
+				itemIndex,
+				lines: [
+					`${product.name}: custom-priced, so staff set the price from the brief`,
+				],
+			});
+			lineItems.push({
+				productId: product.id,
+				description,
+				quantity: qty,
+				unit: product.unit,
+				unitPriceSen: product.unitPriceSen,
+				amountSen: product.unitPriceSen * qty,
+				notes: "Custom: price from the requirement brief",
+			});
+			return;
+		}
+
+		const qty = item.quantity && item.quantity > 0 ? item.quantity : 1;
 		const applicable = rulesFor(rules, product.id);
 
 		let assessment: string | undefined;
@@ -138,7 +145,7 @@ export function priceRequest(
 				!w ||
 				("quantityAbove" in w
 					? qty > w.quantityAbove
-					: matchesWhen(w, item.fields));
+					: matchesWhen(w, item.answers));
 			if (hit) {
 				assessment = config.reason;
 				flags.push({
@@ -171,7 +178,10 @@ export function priceRequest(
 		const notes: string[] = [];
 		let flatSen = 0;
 		for (const { config } of applicable) {
-			if (config.kind !== "surcharge" || !matchesWhen(config.when, item.fields))
+			if (
+				config.kind !== "surcharge" ||
+				!matchesWhen(config.when, item.answers)
+			)
 				continue;
 			if (config.perUnitSen) unitPriceSen += config.perUnitSen;
 			if (config.amountSen) flatSen += config.amountSen;
@@ -221,10 +231,9 @@ export function priceRequest(
 		}
 		explain.push({ itemIndex, lines: log });
 
-		const details = Object.values(item.fields).filter(Boolean).join(", ");
 		lineItems.push({
 			productId: product.id,
-			description: details ? `${product.name} (${details})` : product.name,
+			description,
 			quantity: qty,
 			unit: product.unit,
 			unitPriceSen,
@@ -233,14 +242,12 @@ export function priceRequest(
 		});
 	});
 
-	const has = (k: Flag["kind"]) => flags.some((f) => f.kind === k);
-	const outcome: Outcome = has("missing_info")
-		? "needs_clarification"
-		: flags.length > 0
-			? "needs_review"
-			: "draft_ready";
-
-	return { outcome, flags, lineItems, explain };
+	return {
+		outcome: flags.length > 0 ? "needs_review" : "draft_ready",
+		flags,
+		lineItems,
+		explain,
+	};
 }
 
 export function totals(

@@ -27,6 +27,7 @@ export const businesses = pgTable("businesses", {
 	tagline: text("tagline"),
 	phone: text("phone"),
 	address: text("address"),
+	openingHours: text("opening_hours"), // e.g. "Mon–Sat 9am–6pm"
 	currency: text("currency").default("MYR").notNull(),
 	sstRegistered: boolean("sst_registered").default(true).notNull(),
 	sstRateBps: integer("sst_rate_bps").default(800).notNull(), // 800 = 8.00%
@@ -34,15 +35,11 @@ export const businesses = pgTable("businesses", {
 	createdAt: createdAt(),
 });
 
-/** A field the customer must provide before an item can be priced. */
-export type RequiredField = {
-	key: string;
-	label: string;
-	options?: string[];
-};
-
 /** "stock" items are counted and reserved; "service" covers services and made-to-order work. */
 export const productType = pgEnum("product_type", ["stock", "service"]);
+
+/** "fixed": priced by the catalog and rules. "custom": staff price it from the requirement brief. */
+export const pricingMode = pgEnum("pricing_mode", ["fixed", "custom"]);
 
 export const products = pgTable(
 	"products",
@@ -58,10 +55,7 @@ export const products = pgTable(
 		description: text("description").notNull(),
 		unit: text("unit").notNull(), // "pc", "unit", "sqft", "job"
 		unitPriceSen: integer("unit_price_sen").notNull(),
-		requiredFields: jsonb("required_fields")
-			.$type<RequiredField[]>()
-			.default([])
-			.notNull(),
+		pricingMode: pricingMode("pricing_mode").default("fixed").notNull(),
 		active: boolean("active").default(true).notNull(),
 		// Stock items only. Available = on hand − reserved (reserved when a customer signs).
 		stockOnHand: integer("stock_on_hand").default(0).notNull(),
@@ -100,6 +94,52 @@ export const pricingRules = pgTable("pricing_rules", {
 	}),
 	description: text("description").notNull(),
 	config: jsonb("config").$type<PricingRuleConfig>().notNull(),
+});
+
+// --- Preset questions -----------------------------------------------------------
+
+export const questionScope = pgEnum("question_scope", [
+	"business", // asked in every enquiry
+	"category", // every product in a category
+	"product",
+]);
+
+export const questionType = pgEnum("question_type", [
+	"text",
+	"number",
+	"date",
+	"single", // pick one option
+	"multi", // pick any options
+	"yes_no",
+	"file", // photo or document
+]);
+
+/** Only ask this question when another answer matches. */
+export type ShowIf = { key: string; equals: string };
+
+/** What the AI must find out before a quote can be drafted. Pricing rules read answers by `key`. */
+export const intakeQuestions = pgTable("intake_questions", {
+	id: id(),
+	businessId: text("business_id")
+		.notNull()
+		.references(() => businesses.id, { onDelete: "cascade" }),
+	scope: questionScope("scope").notNull(),
+	category: text("category"), // scope = category
+	productId: text("product_id").references(() => products.id, {
+		onDelete: "cascade",
+	}), // scope = product
+	key: text("key").notNull(), // e.g. "paper"; unique within what one item sees
+	label: text("label").notNull(), // the question, e.g. "Which paper would you like?"
+	type: questionType("type").notNull(),
+	options: jsonb("options").$type<string[]>().default([]).notNull(),
+	required: boolean("required").default(true).notNull(),
+	position: integer("position").default(0).notNull(),
+	hint: text("hint"), // guidance for the AI, e.g. "a rough range is fine"
+	showIf: jsonb("show_if").$type<ShowIf | null>(),
+	/** Print the answer in the quotation line, e.g. "Flyer A5 (157gsm art paper, double)". */
+	onQuote: boolean("on_quote").default(false).notNull(),
+	source: text("source").default("staff").notNull(), // "staff" | "ai"
+	createdAt: createdAt(),
 });
 
 export const staff = pgTable("staff", {
@@ -142,44 +182,77 @@ export const messages = pgTable("messages", {
 	body: text("body").notNull(),
 	quoteId: text("quote_id"), // set when the message carries an approved quote
 	authorName: text("author_name"), // staff member who wrote it, if any
+	/** A photo or document sent with the message. Data is served from /api/messages/:id/attachment. */
+	attachment: jsonb("attachment").$type<Attachment | null>(),
+	attachmentData: text("attachment_data"), // data URL
 	createdAt: createdAt(),
 });
 
+export type Attachment = { name: string; mime: string; size: number };
+
 export const requestStatus = pgEnum("request_status", [
-	"needs_clarification", // waiting on customer
-	"needs_review", // flagged for a human
+	"gathering", // AI is asking the customer for requirements
+	"confirming", // summary sent, waiting for the customer to confirm
+	"needs_review", // drafted, but staff must price or check something
 	"draft_ready", // priced, waiting for approval
 	"approved",
 	"rejected",
 ]);
 
-/** What the AI pulled out of the conversation. Prices are never set by the AI. */
-export type ExtractedItem = {
+export type Language = "en" | "ms" | "zh" | "mixed";
+
+/** An answer to a preset question, and where it came from. */
+export type Answer = {
+	values: string[]; // one value for most types; several for "multi"
+	source: "customer" | "staff" | "skipped";
+	messageId?: string; // the customer message it came from
+	by?: string; // staff name
+	fileMessageId?: string; // for "file" answers: the message carrying the attachment
+	at: string; // ISO time
+};
+
+/** One product or service the customer wants. */
+export type BriefItem = {
+	id: string;
 	/** "exact" = one clear catalog match, "ambiguous" = several could fit, "none" = not in catalog. */
 	match: "exact" | "ambiguous" | "none";
 	productId: string | null;
 	candidateProductIds: string[];
 	rawText: string;
 	quantity: number | null;
-	fields: Record<string, string>;
-	/** The AI's one-line explanation of this match. */
-	reason?: string;
+	answers: Record<string, Answer>;
+	reason?: string; // the AI's note on the match
 };
 
-export type ExtractedRequest = {
-	language: "en" | "ms" | "zh" | "mixed";
+/** An extra question asked by the AI (on a vague answer) or added by staff. */
+export type FollowUp = {
+	id: string;
+	question: string;
+	from: "ai" | "staff";
+	by?: string;
+	answer: string | null;
+	asked: boolean; // has it been put to the customer yet
+	at: string;
+};
+
+/** Everything gathered so far for one quotation request. */
+export type Brief = {
+	language: Language;
 	summary: string;
-	items: ExtractedItem[];
-	location: string | null;
-	neededBy: string | null;
-	/** Short notes from the AI on how it read the conversation. */
-	reasoning?: string[];
+	items: BriefItem[];
+	general: Record<string, Answer>; // business-wide questions
+	followUps: FollowUp[];
+	reasoning: string[]; // the AI's latest notes
+	/** Things already put to the customer (see `missingId`), so optional ones are asked once. */
+	asked: string[];
+	/** Set while the customer is changing a quote that was already sent. */
+	revisionOf?: string | null;
 };
 
 export type Flag = {
 	kind:
-		| "missing_info"
 		| "unknown_item"
+		| "custom_pricing"
 		| "needs_assessment"
 		| "insufficient_stock"
 		| "ai_uncertain";
@@ -198,7 +271,7 @@ export const quoteRequests = pgTable("quote_requests", {
 		.notNull()
 		.references(() => conversations.id, { onDelete: "cascade" }),
 	status: requestStatus("status").notNull(),
-	extracted: jsonb("extracted").$type<ExtractedRequest>().notNull(),
+	brief: jsonb("brief").$type<Brief>().notNull(),
 	flags: jsonb("flags").$type<Flag[]>().default([]).notNull(),
 	createdAt: createdAt(),
 	updatedAt: timestamp("updated_at", { withTimezone: true })
@@ -221,11 +294,14 @@ export const quoteStatus = pgEnum("quote_status", [
 	"approved", // approved by staff and sent for signature
 	"rejected",
 	"accepted", // signed by the customer
+	"superseded", // replaced by a newer revision
 ]);
 
 export const quotes = pgTable("quotes", {
 	id: id(),
-	number: text("number").notNull().unique(), // e.g. "KP-Q-0001"
+	number: text("number").notNull().unique(), // e.g. "KP-Q-0001", or "KP-Q-0001-R2" for revision 2
+	revision: integer("revision").default(1).notNull(),
+	supersedesId: text("supersedes_id"), // the quote this revision replaces
 	businessId: text("business_id")
 		.notNull()
 		.references(() => businesses.id, { onDelete: "cascade" }),
@@ -273,6 +349,7 @@ export type ThoughtStep = {
 		| "price"
 		| "decide"
 		| "reply"
+		| "ask"
 		| "held"
 		| "error";
 	title: string;
