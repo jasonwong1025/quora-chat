@@ -394,21 +394,17 @@ async function sendReminder(followUpId: string, byStaff?: string) {
 }
 
 /** Quote ran out: extend once with a friendly note, after that it's lost. */
-async function handleExpiry(quote: Quote) {
-	const db = getDb();
+export async function handleExpiry(quote: Quote) {
 	const ctx = await loadQuoteContext(quote.id);
 	if (!ctx) return;
 	const { business, request, conversation } = ctx;
 	if (request.status !== "approved") return; // being revised
 
-	if (!quote.extendedAt) {
+	if (!quote.extendedAt && business.extendDays > 0) {
 		const validUntil = new Date(
 			quote.validUntil.getTime() + business.extendDays * DAY,
 		);
-		await db
-			.update(schema.quotes)
-			.set({ validUntil, extendedAt: new Date() })
-			.where(eq(schema.quotes.id, quote.id));
+		// The AI writes the note first; nothing is changed unless it still applies.
 		const body =
 			(await writeFollowUp({
 				businessName: business.name,
@@ -423,37 +419,62 @@ async function handleExpiry(quote: Quote) {
 				recentChat: await recentChat(conversation.id),
 			}).catch(() => "")) ||
 			`Hi, quotation ${quote.number} has been extended until ${myDate(validUntil)}. Any questions, just let us know.`;
-		const [message] = await db
-			.insert(schema.messages)
-			.values({ conversationId: conversation.id, sender: "assistant", body })
-			.returning();
-		await db.insert(schema.quoteFollowUps).values({
-			businessId: business.id,
-			quoteId: quote.id,
-			conversationId: conversation.id,
-			kind: "extension",
-			status: "sent",
-			dueAt: message.createdAt,
-			sentAt: message.createdAt,
-			messageId: message.id,
-			body,
-			reason: `Validity ran out; extended once by ${business.extendDays} days`,
+		// Locked and re-checked, so a signature or a second scheduler run in the
+		// meantime can't lead to a double extension or an extension after signing.
+		const extended = await getDb().transaction(async (db) => {
+			const [current] = await db
+				.select()
+				.from(schema.quotes)
+				.where(eq(schema.quotes.id, quote.id))
+				.for("update");
+			if (
+				!current ||
+				current.status !== "approved" ||
+				current.extendedAt ||
+				current.validUntil > new Date()
+			)
+				return false;
+			await db
+				.update(schema.quotes)
+				.set({ validUntil, extendedAt: new Date() })
+				.where(eq(schema.quotes.id, quote.id));
+			const [message] = await db
+				.insert(schema.messages)
+				.values({ conversationId: conversation.id, sender: "assistant", body })
+				.returning();
+			await db.insert(schema.quoteFollowUps).values({
+				businessId: business.id,
+				quoteId: quote.id,
+				conversationId: conversation.id,
+				kind: "extension",
+				status: "sent",
+				dueAt: message.createdAt,
+				sentAt: message.createdAt,
+				messageId: message.id,
+				body,
+				reason: `Validity ran out; extended once by ${business.extendDays} days`,
+			});
+			await emitOrbyteEvent(db, {
+				businessId: business.id,
+				requestId: request.id,
+				type: "quote.extended",
+				actor: "quora-chat",
+				summary: `${quote.number} expired unsigned; extended once until ${myDate(validUntil)}`,
+			});
+			return true;
 		});
-		await emitOrbyteEvent(db, {
-			businessId: business.id,
-			requestId: request.id,
-			type: "quote.extended",
-			actor: "quora-chat",
-			summary: `${quote.number} expired unsigned; extended once until ${myDate(validUntil)}`,
-		});
-		await planNextFollowUp(quote.id);
+		if (extended) await planNextFollowUp(quote.id);
 		return;
 	}
 	await markLost({
 		quoteId: quote.id,
 		reason: "no_reply",
-		note: "Expired after one extension with no signature",
+		note: quote.extendedAt
+			? "Expired after one extension with no signature"
+			: "Expired with no signature (extensions are off)",
 		actor: "quora-chat",
+	}).catch(() => {
+		// Signed or closed in the meantime: nothing to mark.
 	});
 }
 
