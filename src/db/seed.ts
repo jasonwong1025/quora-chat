@@ -35,7 +35,9 @@ async function main() {
 	const db = getDb();
 
 	await db.transaction(async (tx) => {
-		// Deleting businesses cascades to everything else.
+		// Deleting businesses cascades to everything else, except the background task
+		// queue (it has no foreign keys), so clear that too.
+		await tx.delete(schema.workflowTasks);
 		await tx.delete(schema.businesses);
 
 		for (const b of demoBusinesses) {
