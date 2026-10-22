@@ -12,6 +12,7 @@ export type OrbyteEventType =
 	| "quote.request.confirmation_requested"
 	| "quote.request.confirmed"
 	| "quote.brief.edited"
+	| "quote.brief.versioned"
 	| "quote.draft.outdated"
 	| "quote.revision.requested"
 	| "quote.superseded"

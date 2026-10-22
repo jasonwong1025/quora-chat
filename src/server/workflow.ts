@@ -17,7 +17,11 @@ import type {
 	LineItem,
 	ThoughtStep,
 } from "#/db/schema";
-import { quoteAgreementIssue, quoteReviewToken } from "#/lib/agreements";
+import {
+	agreementContent,
+	quoteAgreementIssue,
+	quoteReviewToken,
+} from "#/lib/agreements";
 import {
 	type Assessment,
 	answerIssue,
@@ -519,6 +523,25 @@ async function nextQuoteNumber(
 	return `${prefix}-Q-${String(n + 1).padStart(4, "0")}`;
 }
 
+/** Highest revision already used for a quote number (e.g. 3 for KP-Q-0001-R3). */
+async function latestRevision(db: Database, businessId: string, base: string) {
+	const family = new RegExp(
+		`^${base.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?:-R\\d+)?$`,
+	);
+	const rows = await db
+		.select({ number: schema.quotes.number, revision: schema.quotes.revision })
+		.from(schema.quotes)
+		.where(
+			and(
+				eq(schema.quotes.businessId, businessId),
+				sql`starts_with(${schema.quotes.number}, ${base})`,
+			),
+		);
+	return rows
+		.filter((r) => family.test(r.number))
+		.reduce((max, r) => Math.max(max, r.revision), 1);
+}
+
 /** Creates or updates the draft. While revising a sent quote, the draft is its next revision. */
 async function upsertDraftQuote(
 	request: typeof schema.quoteRequests.$inferSelect,
@@ -577,10 +600,14 @@ async function upsertDraftQuote(
 					where: eq(schema.quotes.id, revisionOf),
 				})
 			: undefined;
-		const revision = previous ? previous.revision + 1 : 1;
 		const base = previous
 			? previous.number.replace(/-R\d+$/, "")
 			: await nextQuoteNumber(db, business.id, business.quotePrefix);
+		// Number from the whole family, not just `previous`: a rejected R2 keeps its
+		// number, so the next attempt at revising R1 must become R3.
+		const revision = previous
+			? (await latestRevision(db, business.id, base)) + 1
+			: 1;
 		const [row] = await db
 			.insert(schema.quotes)
 			.values({
@@ -1837,16 +1864,63 @@ export async function decideQuote(input: {
 			.set({ status: input.decision, decidedBy: member.id, decidedAt: now })
 			.where(eq(schema.quotes.id, quote.id))
 			.returning();
-		const brief = { ...request.brief, revisionOf: null };
+		let brief: Brief = { ...request.brief, revisionOf: null };
+		let briefVersion = request.briefVersion;
+		// A rejected revision leaves the earlier sent quote in place. When that quote
+		// shares this request, the revision changed its requirements, so put back the
+		// requirements it was agreed on; otherwise it could never be signed.
+		let restored: typeof schema.quotes.$inferSelect | null = null;
+		if (input.decision === "rejected" && quote.supersedesId) {
+			const [earlier] = await db
+				.select()
+				.from(schema.quotes)
+				.where(eq(schema.quotes.id, quote.supersedesId))
+				.for("update");
+			if (
+				earlier?.requestId === request.id &&
+				earlier.status === "approved" &&
+				earlier.requirementsSnapshot
+			) {
+				brief = {
+					...structuredClone(earlier.requirementsSnapshot),
+					revisionOf: null,
+				};
+				if (agreementContent(brief) !== agreementContent(request.brief)) {
+					briefVersion = request.briefVersion + 1;
+					const reason = `Rejected ${quote.number}; restored the requirements agreed in ${earlier.number}`;
+					await db.insert(schema.requirementVersions).values({
+						requestId: request.id,
+						version: briefVersion,
+						brief,
+						actor: member.name,
+						reason,
+					});
+					await emitOrbyteEvent(db, {
+						businessId: quote.businessId,
+						requestId: request.id,
+						type: "quote.brief.versioned",
+						actor: member.name,
+						summary: `Requirements updated to version ${briefVersion}: ${reason}`,
+					});
+				}
+				// Same requirements as its snapshot, now under the current version number.
+				if (earlier.requirementVersion !== briefVersion)
+					await db
+						.update(schema.quotes)
+						.set({ requirementVersion: briefVersion })
+						.where(eq(schema.quotes.id, earlier.id));
+				restored = earlier;
+			}
+		}
 		await db
 			.update(schema.quoteRequests)
 			.set({
-				// A rejected revision leaves the earlier sent quote in place.
 				status:
 					input.decision === "rejected" && quote.supersedesId
 						? "approved"
 						: input.decision,
 				brief,
+				briefVersion,
 				updatedAt: now,
 			})
 			.where(eq(schema.quoteRequests.id, request.id));
@@ -1913,11 +1987,13 @@ export async function decideQuote(input: {
 				summary: `${quote.number} sent for customer signature`,
 			});
 		}
-		return row;
+		return { row, restoredId: restored?.id ?? null };
 	});
 	if (input.decision === "approved")
-		await onQuoteSent(decided.id, decided.supersedesId);
-	return decided;
+		await onQuoteSent(decided.row.id, decided.row.supersedesId);
+	// Reminders stopped while the customer was changing it; the earlier quote is live again.
+	else if (decided.restoredId) await onQuoteOpened(decided.restoredId);
+	return decided.row;
 }
 
 // --- Chat takeover -------------------------------------------------------------

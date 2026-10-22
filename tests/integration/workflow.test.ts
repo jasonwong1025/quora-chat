@@ -961,3 +961,97 @@ for (const intent of ["question", "price_concern", "none"] as const) {
 		assert.equal((await signQuote(signature(quote.id))).status, "accepted");
 	});
 }
+
+test("rejecting a revision of an unsigned quote keeps it signable and numbers the next revision R3", async () => {
+	const s = await scenario();
+	const original = await approve(s);
+	const db = getDb();
+
+	async function requestChange(users: string) {
+		reading = {
+			language: "en",
+			summary: `System for ${users} users`,
+			items: [
+				{
+					ref: "item",
+					productId: s.product.id,
+					match: "exact",
+					candidateProductIds: [],
+					rawText: "custom system",
+					quantity: 1,
+					removed: false,
+					reason: "Customer requested more users",
+					answers: [
+						{
+							key: "users",
+							values: [users],
+							state: "known",
+							evidenceMessageId: "LATEST",
+						},
+					],
+				},
+			],
+			general: [],
+			followUpAnswers: [],
+			followUp: null,
+			confirmation: "changed",
+			wantsChange: true,
+			quoteResponse: {
+				intent: "none",
+				resumeOn: null,
+				lostReason: null,
+				note: null,
+			},
+			customerQuestion: null,
+			reasoning: ["A change to the sent quotation"],
+		};
+		for await (const _ of handleCustomerMessage({
+			conversationId: s.conversation.id,
+			body: `Can you change it to ${users} users?`,
+		})) {
+			/* drain */
+		}
+		await draftNow({ requestId: s.request.id, staffId: s.staff.id });
+		const revision = await db.query.quotes.findFirst({
+			where: and(
+				eq(schema.quotes.requestId, s.request.id),
+				eq(schema.quotes.status, "draft"),
+			),
+		});
+		assert.ok(revision);
+		return revision;
+	}
+	async function reject(quote: typeof schema.quotes.$inferSelect) {
+		await decideQuote({
+			quoteId: quote.id,
+			staffId: s.staff.id,
+			decision: "rejected",
+			reviewToken: quoteReviewToken(quote),
+		});
+	}
+
+	const r2 = await requestChange("100");
+	assert.equal(r2.number, `${original.number}-R2`);
+	await reject(r2);
+
+	const request = await db.query.quoteRequests.findFirst({
+		where: eq(schema.quoteRequests.id, s.request.id),
+	});
+	assert.equal(request?.status, "approved");
+	assert.equal(request?.brief.revisionOf, null);
+	assert.deepEqual(request?.brief.items[0].answers.users.values, ["50"]);
+	const reopened = await db.query.quotes.findFirst({
+		where: eq(schema.quotes.id, original.id),
+	});
+	assert.equal(reopened?.status, "approved");
+	assert.equal(reopened?.requirementVersion, request?.briefVersion);
+
+	// Asking again must not reuse the rejected R2 number.
+	const r3 = await requestChange("200");
+	assert.equal(r3.number, `${original.number}-R3`);
+	assert.equal(r3.revision, 3);
+	assert.equal(r3.supersedesId, original.id);
+	await reject(r3);
+
+	assert.equal((await signQuote(signature(original.id))).status, "accepted");
+});
