@@ -15,3 +15,6 @@ export type WhatsappChat = Outputs["whatsapp"]["chats"][number];
 export type EsignRow = Outputs["esign"]["list"][number];
 export type Product = BusinessDetail["products"][number];
 export type PricingRule = BusinessDetail["rules"][number];
+export type JobRow = Outputs["jobs"]["list"][number];
+export type JobDetail = Outputs["jobs"]["get"];
+export type Notification = Outputs["notifications"]["list"][number];

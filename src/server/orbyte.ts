@@ -33,6 +33,15 @@ export type OrbyteEventType =
 	| "esign.signed"
 	| "product.created"
 	| "product.updated"
+	| "job.created"
+	| "job.handover_ready"
+	| "job.assigned"
+	| "job.status_changed"
+	| "job.task_added"
+	| "relay.requested"
+	| "relay.sent"
+	| "relay.rejected"
+	| "relay.answered"
 	| "stock.reserved"
 	| "stock.adjusted";
 

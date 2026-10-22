@@ -39,6 +39,7 @@ import {
 	readTurn,
 	writeReply,
 } from "./ai";
+import { matchRelayAnswer, startHandover } from "./jobs";
 import { emitOrbyteEvent } from "./orbyte";
 import { formatMYR, priceBrief, totals } from "./pricing";
 
@@ -838,6 +839,52 @@ export async function* handleCustomerMessage(input: {
 	}
 
 	const catalog = await loadCatalog(businessId);
+
+	// Waiting on an answer for a PIC? If this message is it, pass it on and stop.
+	const relayed = await matchRelayAnswer({
+		conversationId: conversation.id,
+		message: incoming,
+	});
+	if (relayed) {
+		await run.add({
+			kind: "relay",
+			title: `Answered the team's question for ${relayed.job?.number ?? "a job"}`,
+			detail: [
+				`Question: ${relayed.relay.question}`,
+				`Answer: ${relayed.relay.answer}`,
+				"Passed to the PIC; no new quotation request",
+			],
+		});
+		const rows = await historyFor(conversation.id, null);
+		const reply =
+			(await writeReply({
+				business: catalog.business,
+				customerName: conversation.customerName,
+				language:
+					(
+						await db.query.quoteRequests.findFirst({
+							where: eq(schema.quoteRequests.conversationId, conversation.id),
+							orderBy: desc(schema.quoteRequests.createdAt),
+						})
+					)?.brief.language ?? "en",
+				plan: { stage: "relay_thanks" },
+				customerQuestion: null,
+				notOffered: [],
+				history: toTurns(rows),
+				firstReply: false,
+			}).catch(() => "")) || fallbackReply("en");
+		yield { step: "staged", status: null, requestId: null };
+		await db.insert(schema.messages).values({
+			conversationId: conversation.id,
+			sender: "assistant",
+			body: reply,
+		});
+		await run.add({ kind: "reply", title: "Thanked the customer" });
+		await run.finish("done");
+		yield { step: "replied", body: reply };
+		return;
+	}
+
 	const sent = open ? null : await findSentQuote(conversation.id);
 	const rows = await historyFor(conversation.id, open ?? sent?.request ?? null);
 	const history = toTurns(rows);
@@ -1636,6 +1683,10 @@ export async function signQuote(input: {
 		sender: "assistant",
 		body: signedThanks[request.brief.language](quote.number),
 	});
+	// Hand the job to its person in charge.
+	await startHandover(row, request).catch((err) =>
+		console.error("[handover] could not start", err),
+	);
 	return row;
 }
 

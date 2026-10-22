@@ -10,6 +10,7 @@ import {
 	MessageSquareText,
 	PackageSearch,
 	PauseCircle,
+	Reply,
 	Scale,
 	TriangleAlert,
 } from "lucide-react";
@@ -25,6 +26,7 @@ const stepIcon: Record<ThoughtStep["kind"], typeof Eye> = {
 	check: ListChecks,
 	price: Calculator,
 	ask: MessageCircleQuestion,
+	relay: Reply,
 	decide: Scale,
 	reply: MessageSquareText,
 	held: PauseCircle,

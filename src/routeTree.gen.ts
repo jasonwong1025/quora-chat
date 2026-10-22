@@ -22,7 +22,8 @@ import { Route as OrbyteBusinessIdInboxRouteImport } from './routes/orbyte.$busi
 import { Route as OrbyteBusinessIdPeopleRouteImport } from './routes/orbyte.$businessId.people'
 import { Route as OrbyteBusinessIdProductsRouteImport } from './routes/orbyte.$businessId.products'
 import { Route as OrbyteBusinessIdQuotesRouteImport } from './routes/orbyte.$businessId.quotes'
-import { Route as OrbyteBusinessIdWorkRouteImport } from './routes/orbyte.$businessId.work'
+import { Route as OrbyteBusinessIdWorkIndexRouteImport } from './routes/orbyte.$businessId.work.index'
+import { Route as OrbyteBusinessIdWorkJobIdRouteImport } from './routes/orbyte.$businessId.work.$jobId'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
@@ -90,11 +91,18 @@ const OrbyteBusinessIdQuotesRoute = OrbyteBusinessIdQuotesRouteImport.update({
   path: '/quotes',
   getParentRoute: () => OrbyteBusinessIdRoute,
 } as any)
-const OrbyteBusinessIdWorkRoute = OrbyteBusinessIdWorkRouteImport.update({
-  id: '/work',
-  path: '/work',
-  getParentRoute: () => OrbyteBusinessIdRoute,
-} as any)
+const OrbyteBusinessIdWorkIndexRoute =
+  OrbyteBusinessIdWorkIndexRouteImport.update({
+    id: '/work/',
+    path: '/work/',
+    getParentRoute: () => OrbyteBusinessIdRoute,
+  } as any)
+const OrbyteBusinessIdWorkJobIdRoute =
+  OrbyteBusinessIdWorkJobIdRouteImport.update({
+    id: '/work/$jobId',
+    path: '/work/$jobId',
+    getParentRoute: () => OrbyteBusinessIdRoute,
+  } as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
@@ -109,8 +117,9 @@ export interface FileRoutesByFullPath {
   '/orbyte/$businessId/people': typeof OrbyteBusinessIdPeopleRoute
   '/orbyte/$businessId/products': typeof OrbyteBusinessIdProductsRoute
   '/orbyte/$businessId/quotes': typeof OrbyteBusinessIdQuotesRoute
-  '/orbyte/$businessId/work': typeof OrbyteBusinessIdWorkRoute
   '/orbyte/$businessId/': typeof OrbyteBusinessIdIndexRoute
+  '/orbyte/$businessId/work/$jobId': typeof OrbyteBusinessIdWorkJobIdRoute
+  '/orbyte/$businessId/work/': typeof OrbyteBusinessIdWorkIndexRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
@@ -124,8 +133,9 @@ export interface FileRoutesByTo {
   '/orbyte/$businessId/people': typeof OrbyteBusinessIdPeopleRoute
   '/orbyte/$businessId/products': typeof OrbyteBusinessIdProductsRoute
   '/orbyte/$businessId/quotes': typeof OrbyteBusinessIdQuotesRoute
-  '/orbyte/$businessId/work': typeof OrbyteBusinessIdWorkRoute
   '/orbyte/$businessId': typeof OrbyteBusinessIdIndexRoute
+  '/orbyte/$businessId/work/$jobId': typeof OrbyteBusinessIdWorkJobIdRoute
+  '/orbyte/$businessId/work': typeof OrbyteBusinessIdWorkIndexRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -141,8 +151,9 @@ export interface FileRoutesById {
   '/orbyte/$businessId/people': typeof OrbyteBusinessIdPeopleRoute
   '/orbyte/$businessId/products': typeof OrbyteBusinessIdProductsRoute
   '/orbyte/$businessId/quotes': typeof OrbyteBusinessIdQuotesRoute
-  '/orbyte/$businessId/work': typeof OrbyteBusinessIdWorkRoute
   '/orbyte/$businessId/': typeof OrbyteBusinessIdIndexRoute
+  '/orbyte/$businessId/work/$jobId': typeof OrbyteBusinessIdWorkJobIdRoute
+  '/orbyte/$businessId/work/': typeof OrbyteBusinessIdWorkIndexRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -159,8 +170,9 @@ export interface FileRouteTypes {
     | '/orbyte/$businessId/people'
     | '/orbyte/$businessId/products'
     | '/orbyte/$businessId/quotes'
-    | '/orbyte/$businessId/work'
     | '/orbyte/$businessId/'
+    | '/orbyte/$businessId/work/$jobId'
+    | '/orbyte/$businessId/work/'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
@@ -174,8 +186,9 @@ export interface FileRouteTypes {
     | '/orbyte/$businessId/people'
     | '/orbyte/$businessId/products'
     | '/orbyte/$businessId/quotes'
-    | '/orbyte/$businessId/work'
     | '/orbyte/$businessId'
+    | '/orbyte/$businessId/work/$jobId'
+    | '/orbyte/$businessId/work'
   id:
     | '__root__'
     | '/'
@@ -190,8 +203,9 @@ export interface FileRouteTypes {
     | '/orbyte/$businessId/people'
     | '/orbyte/$businessId/products'
     | '/orbyte/$businessId/quotes'
-    | '/orbyte/$businessId/work'
     | '/orbyte/$businessId/'
+    | '/orbyte/$businessId/work/$jobId'
+    | '/orbyte/$businessId/work/'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -296,11 +310,18 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof OrbyteBusinessIdQuotesRouteImport
       parentRoute: typeof OrbyteBusinessIdRoute
     }
-    '/orbyte/$businessId/work': {
-      id: '/orbyte/$businessId/work'
+    '/orbyte/$businessId/work/': {
+      id: '/orbyte/$businessId/work/'
       path: '/work'
-      fullPath: '/orbyte/$businessId/work'
-      preLoaderRoute: typeof OrbyteBusinessIdWorkRouteImport
+      fullPath: '/orbyte/$businessId/work/'
+      preLoaderRoute: typeof OrbyteBusinessIdWorkIndexRouteImport
+      parentRoute: typeof OrbyteBusinessIdRoute
+    }
+    '/orbyte/$businessId/work/$jobId': {
+      id: '/orbyte/$businessId/work/$jobId'
+      path: '/work/$jobId'
+      fullPath: '/orbyte/$businessId/work/$jobId'
+      preLoaderRoute: typeof OrbyteBusinessIdWorkJobIdRouteImport
       parentRoute: typeof OrbyteBusinessIdRoute
     }
   }
@@ -313,8 +334,9 @@ interface OrbyteBusinessIdRouteChildren {
   OrbyteBusinessIdPeopleRoute: typeof OrbyteBusinessIdPeopleRoute
   OrbyteBusinessIdProductsRoute: typeof OrbyteBusinessIdProductsRoute
   OrbyteBusinessIdQuotesRoute: typeof OrbyteBusinessIdQuotesRoute
-  OrbyteBusinessIdWorkRoute: typeof OrbyteBusinessIdWorkRoute
   OrbyteBusinessIdIndexRoute: typeof OrbyteBusinessIdIndexRoute
+  OrbyteBusinessIdWorkJobIdRoute: typeof OrbyteBusinessIdWorkJobIdRoute
+  OrbyteBusinessIdWorkIndexRoute: typeof OrbyteBusinessIdWorkIndexRoute
 }
 
 const OrbyteBusinessIdRouteChildren: OrbyteBusinessIdRouteChildren = {
@@ -324,8 +346,9 @@ const OrbyteBusinessIdRouteChildren: OrbyteBusinessIdRouteChildren = {
   OrbyteBusinessIdPeopleRoute: OrbyteBusinessIdPeopleRoute,
   OrbyteBusinessIdProductsRoute: OrbyteBusinessIdProductsRoute,
   OrbyteBusinessIdQuotesRoute: OrbyteBusinessIdQuotesRoute,
-  OrbyteBusinessIdWorkRoute: OrbyteBusinessIdWorkRoute,
   OrbyteBusinessIdIndexRoute: OrbyteBusinessIdIndexRoute,
+  OrbyteBusinessIdWorkJobIdRoute: OrbyteBusinessIdWorkJobIdRoute,
+  OrbyteBusinessIdWorkIndexRoute: OrbyteBusinessIdWorkIndexRoute,
 }
 
 const OrbyteBusinessIdRouteWithChildren =

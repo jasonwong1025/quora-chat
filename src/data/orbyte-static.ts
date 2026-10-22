@@ -1,5 +1,5 @@
 /**
- * Demo content for the existing Orbyte modules (People, Work, Connect).
+ * Demo content for the existing Orbyte modules (People, Connect).
  * No backend yet. Each type mirrors a future table, so these functions can
  * later be swapped for API calls without touching the pages.
  */
@@ -22,19 +22,6 @@ export type Claim = {
 	item: string;
 	amountSen: number;
 	status: "pending" | "approved" | "paid";
-};
-
-export type DailyStatus = {
-	staffName: string;
-	today: string;
-	state: "on_track" | "blocked" | "done";
-};
-
-export type Project = {
-	name: string;
-	owner: string;
-	progress: number; // 0–100
-	due: string;
 };
 
 export type Integration = {
@@ -99,58 +86,6 @@ export function getClaims(staff: StaffLike[]): Claim[] {
 		id: `claim-${i}`,
 		staffName: pick(staff, i).name,
 	}));
-}
-
-export function getDailyStatus(
-	staff: StaffLike[],
-	industry: string,
-): DailyStatus[] {
-	const tasks: Record<string, string[]> = {
-		Printing: [
-			"Reviewing today's quotation queue",
-			"Printing 2,000 A5 flyers for Kedai Runcit Maju",
-			"Waiting for banner artwork from customer",
-		],
-		"Aircon servicing": [
-			"Approving this week's service quotes",
-			"Scheduling chemical washes in Shah Alam",
-			"Install job at Taman Melawati — waiting on bracket",
-		],
-		"Renovation & handyman": [
-			"Site visit: kitchen tiling, Cheras",
-			"Ordering paint for 3-room job",
-			"Waiting for owner to confirm colour",
-		],
-	};
-	const list = tasks[industry] ?? tasks.Printing;
-	return staff.map((s, i) => ({
-		staffName: s.name,
-		today: pick(list, i),
-		state: pick<DailyStatus["state"]>(["on_track", "done", "blocked"], i),
-	}));
-}
-
-export function getProjects(staff: StaffLike[]): Project[] {
-	return [
-		{
-			name: "Move quoting to Orbyte Quotation",
-			owner: pick(staff, 0).name,
-			progress: 70,
-			due: "2026-11-15",
-		},
-		{
-			name: "Year-end promotion",
-			owner: pick(staff, 1).name,
-			progress: 35,
-			due: "2026-12-01",
-		},
-		{
-			name: "Update supplier price list",
-			owner: pick(staff, 2).name,
-			progress: 90,
-			due: "2026-10-31",
-		},
-	];
 }
 
 export const integrations: Integration[] = [

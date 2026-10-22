@@ -350,6 +350,7 @@ export type ThoughtStep = {
 		| "decide"
 		| "reply"
 		| "ask"
+		| "relay"
 		| "held"
 		| "error";
 	title: string;
@@ -377,4 +378,188 @@ export const aiRuns = pgTable("ai_runs", {
 	steps: jsonb("steps").$type<ThoughtStep[]>().default([]).notNull(),
 	createdAt: createdAt(),
 	finishedAt: timestamp("finished_at", { withTimezone: true }),
+});
+
+// --- After signing: handover to a PIC (mirrors Orbyte Clients → Projects → Tasks) ---
+
+/** Default person in charge for each product category. */
+export const categorySettings = pgTable(
+	"category_settings",
+	{
+		id: id(),
+		businessId: text("business_id")
+			.notNull()
+			.references(() => businesses.id, { onDelete: "cascade" }),
+		category: text("category").notNull(),
+		defaultPicId: text("default_pic_id").references(() => staff.id, {
+			onDelete: "set null",
+		}),
+	},
+	(t) => [uniqueIndex("category_settings_unique").on(t.businessId, t.category)],
+);
+
+/** The customer's company (Orbyte "Client"). */
+export const clients = pgTable("clients", {
+	id: id(),
+	businessId: text("business_id")
+		.notNull()
+		.references(() => businesses.id, { onDelete: "cascade" }),
+	name: text("name").notNull(),
+	contactName: text("contact_name"),
+	phone: text("phone"),
+	createdAt: createdAt(),
+});
+
+/** Named by what was bought: stock → Delivery order, service → Job order, custom-priced → Project. */
+export const jobKind = pgEnum("job_kind", [
+	"delivery_order",
+	"job_order",
+	"project",
+]);
+
+export const jobStatus = pgEnum("job_status", [
+	"preparing", // AI is writing the handover pack
+	"upcoming",
+	"active",
+	"completed",
+	"closed",
+]);
+
+/** What the PIC needs to know, written by the AI from the chat, brief and quote. */
+export type Handover = {
+	summary: string;
+	scope: string[];
+	requirements: { label: string; value: string }[];
+	promises: string[]; // what we told the customer in chat
+	timeline: string | null;
+	watchOuts: string[];
+	customerNotes: string | null; // e.g. preferred language, how they communicate
+};
+
+export const jobs = pgTable("jobs", {
+	id: id(),
+	number: text("number").notNull().unique(), // e.g. "KD-PRJ-0001"
+	businessId: text("business_id")
+		.notNull()
+		.references(() => businesses.id, { onDelete: "cascade" }),
+	clientId: text("client_id")
+		.notNull()
+		.references(() => clients.id, { onDelete: "cascade" }),
+	requestId: text("request_id")
+		.notNull()
+		.references(() => quoteRequests.id, { onDelete: "cascade" }),
+	quoteId: text("quote_id")
+		.notNull()
+		.references(() => quotes.id, { onDelete: "cascade" }),
+	conversationId: text("conversation_id")
+		.notNull()
+		.references(() => conversations.id, { onDelete: "cascade" }),
+	kind: jobKind("kind").notNull(),
+	title: text("title").notNull(),
+	status: jobStatus("status").default("preparing").notNull(),
+	picId: text("pic_id").references(() => staff.id, { onDelete: "set null" }),
+	handover: jsonb("handover").$type<Handover | null>(),
+	createdAt: createdAt(),
+	updatedAt: timestamp("updated_at", { withTimezone: true })
+		.defaultNow()
+		.notNull(),
+	completedAt: timestamp("completed_at", { withTimezone: true }),
+});
+
+export const taskStatus = pgEnum("task_status", [
+	"todo",
+	"active",
+	"blocked",
+	"done",
+]);
+
+export const jobTasks = pgTable("job_tasks", {
+	id: id(),
+	jobId: text("job_id")
+		.notNull()
+		.references(() => jobs.id, { onDelete: "cascade" }),
+	title: text("title").notNull(),
+	status: taskStatus("status").default("todo").notNull(),
+	note: text("note"), // e.g. what's blocking it
+	position: integer("position").default(0).notNull(),
+	source: text("source").default("staff").notNull(), // "ai" | "staff" | "bot"
+	createdAt: createdAt(),
+});
+
+/** Where the PIC's chatbot found something. */
+export type BotSource = {
+	kind: "chat" | "brief" | "quote" | "handover" | "file" | "relay" | "catalog";
+	label: string;
+	ref?: string; // message id for "chat"/"file"
+};
+
+/** Something the chatbot suggests; the PIC confirms with a click. */
+export type BotAction =
+	| { kind: "add_task"; title: string }
+	| { kind: "flag_blocker"; taskId: string | null; note: string }
+	| { kind: "ask_customer"; question: string };
+
+export const jobChat = pgTable("job_chat", {
+	id: id(),
+	jobId: text("job_id")
+		.notNull()
+		.references(() => jobs.id, { onDelete: "cascade" }),
+	role: text("role").notNull(), // "pic" | "assistant"
+	authorName: text("author_name"),
+	body: text("body").notNull(),
+	sources: jsonb("sources").$type<BotSource[]>().default([]).notNull(),
+	actions: jsonb("actions").$type<BotAction[]>().default([]).notNull(),
+	createdAt: createdAt(),
+});
+
+/** A PIC's question for the customer. Sales approve it before Quora Chat sends it. */
+export const relayStatus = pgEnum("relay_status", [
+	"pending", // waiting for sales approval
+	"sent",
+	"answered",
+	"rejected",
+]);
+
+export const relays = pgTable("relays", {
+	id: id(),
+	businessId: text("business_id")
+		.notNull()
+		.references(() => businesses.id, { onDelete: "cascade" }),
+	jobId: text("job_id")
+		.notNull()
+		.references(() => jobs.id, { onDelete: "cascade" }),
+	conversationId: text("conversation_id")
+		.notNull()
+		.references(() => conversations.id, { onDelete: "cascade" }),
+	askedById: text("asked_by_id").references(() => staff.id, {
+		onDelete: "set null",
+	}),
+	question: text("question").notNull(), // the PIC's words (internal)
+	draft: text("draft").notNull(), // customer-facing WhatsApp message
+	status: relayStatus("status").default("pending").notNull(),
+	reviewedById: text("reviewed_by_id").references(() => staff.id, {
+		onDelete: "set null",
+	}),
+	rejectReason: text("reject_reason"),
+	answer: text("answer"),
+	answerMessageId: text("answer_message_id"),
+	createdAt: createdAt(),
+	sentAt: timestamp("sent_at", { withTimezone: true }),
+	answeredAt: timestamp("answered_at", { withTimezone: true }),
+});
+
+/** Simulated Orbyte notifications (app + email). */
+export const notifications = pgTable("notifications", {
+	id: id(),
+	businessId: text("business_id")
+		.notNull()
+		.references(() => businesses.id, { onDelete: "cascade" }),
+	staffId: text("staff_id")
+		.notNull()
+		.references(() => staff.id, { onDelete: "cascade" }),
+	title: text("title").notNull(),
+	body: text("body").notNull(),
+	link: text("link"), // path inside the Orbyte workspace
+	readAt: timestamp("read_at", { withTimezone: true }),
+	createdAt: createdAt(),
 });

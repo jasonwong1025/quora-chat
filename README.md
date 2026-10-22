@@ -10,6 +10,8 @@ Customers send messages in English, Bahasa Melayu, Chinese, or a mix. Like a goo
 4. **Drafts the quotation.** Fixed-price items are priced by deterministic code from the catalog and pricing rules; the AI never sets a price. Custom-priced work (software, audits…) goes to staff with a structured requirement brief to price.
 5. Staff review and approve in Orbyte. The quote goes back on WhatsApp as a PDF with a **Review & sign** link (**Orbyte eSign**).
 6. If the customer asks for changes, the AI confirms them and drafts a **revision** (`-R2`); approving it replaces the earlier version.
+7. **Handover after signing.** Quora Chat creates the Client and a job in **Orbyte Work**, named by what was bought (Delivery order / Job order / Project), assigns the category's default **PIC**, and the AI writes a handover pack: briefing, scope, key requirements, what we promised in chat, watch-outs and starting tasks. The PIC is notified (simulated Orbyte app + email). Completing a delivery order hands over its reserved stock.
+8. **The PIC never talks to the customer.** Their **job assistant** answers from the whole chat, brief, quote and files, shows where it found each answer, and suggests actions (add task, flag a blocker, ask the customer). "Ask the customer" drafts a friendly WhatsApp message that **sales approve** in the Quotation inbox; the customer's reply is routed back to the job and the PIC is notified.
 
 Throughout, staff can see the live **requirement brief** (answers, their source, what's missing), fill in or skip answers, add their own question for the AI to ask, press **Ask now** or **Draft now**, read the AI's reasoning ("AI thinking"), or **take over** the chat. The code decides what to ask and when to draft; the AI reads answers and words the messages. Every step is recorded as a **simulated Orbyte activity event**.
 
@@ -20,10 +22,10 @@ Products also carry a SKU, a type (stock item or service) and stock levels: a qu
 | URL | Who you are | What it is |
 | --- | --- | --- |
 | `/whatsapp` | The customer | A simulated WhatsApp Web. Chats are the 5 businesses. Send text, photos or documents. Switch customer from the top-left menu. |
-| `/orbyte` | The business | An Orbyte workspace: Home, People, Work, eSign, Connect, plus the new **Products** and **Quotation** (Inbox, Quotes) modules. Switch company and signed-in user from the sidebar. |
+| `/orbyte` | The business | An Orbyte workspace: Home, People, **Work** (jobs handed over after signing), eSign, Connect, plus the new **Products** and **Quotation** (Inbox, Quotes) modules. Notifications in the sidebar bell. Switch company and signed-in user from the sidebar. |
 | `/sign/:quoteId` | The customer | The eSign page linked from WhatsApp. |
 
-Open `/whatsapp` and `/orbyte` in two tabs side by side. People, Work and Connect show sample data only (`src/data/orbyte-static.ts`); everything else uses the database.
+Open `/whatsapp` and `/orbyte` in two tabs side by side. People and Connect show sample data only (`src/data/orbyte-static.ts`); everything else uses the database.
 
 > All businesses, people, prices and messages are **synthetic, team-created demo data**. SST rates are illustrative.
 
@@ -69,7 +71,8 @@ src/
   server/
     ai.ts               reads messages into the brief, writes replies, suggests questions (OpenRouter)
     pricing.ts          deterministic pricing engine
-    workflow.ts         message → brief → ask / confirm / draft → approval → revision
+    workflow.ts         message → brief → ask / confirm / draft → approval → revision → signing
+    jobs.ts             handover after signing: client, job, PIC, assistant, relayed questions, notifications
     orbyte.ts           simulated Orbyte activity events
     hono.ts             /api app: oRPC handler, quote PDF, product images, health
     quote-pdf.tsx       PDF layout

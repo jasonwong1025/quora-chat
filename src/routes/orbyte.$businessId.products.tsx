@@ -342,7 +342,8 @@ function QuestionsTab(props: {
 				WhatsApp, a couple at a time, in the customer's own language. It first
 				works out what they want, then asks that product's questions, then the
 				category's, then the business-wide ones, and finally sends a summary for
-				the customer to confirm.
+				the customer to confirm. When the customer signs, the job goes to the
+				category's default PIC in Work.
 			</p>
 			<section className="rounded-xl border bg-card p-4">
 				<h2 className="font-semibold">Every enquiry</h2>
@@ -360,10 +361,15 @@ function QuestionsTab(props: {
 						business.questions.filter((q) => q.productId === id).length;
 					return (
 						<section key={category} className="rounded-xl border bg-card p-4">
-							<h2 className="font-semibold">{category}</h2>
-							<p className="mb-3 text-xs text-muted-foreground">
-								Shared by every product in this category.
-							</p>
+							<div className="flex flex-wrap items-start justify-between gap-2">
+								<div>
+									<h2 className="font-semibold">{category}</h2>
+									<p className="mb-3 text-xs text-muted-foreground">
+										Shared by every product in this category.
+									</p>
+								</div>
+								<DefaultPic category={category} />
+							</div>
 							<QuestionList
 								target={{ scope: "category", category }}
 								emptyText="No shared questions."
@@ -393,6 +399,46 @@ function QuestionsTab(props: {
 					);
 				})}
 			</div>
+		</div>
+	);
+}
+
+/** Who gets the job when a quote for this category is signed. */
+function DefaultPic({ category }: { category: string }) {
+	const { business } = useWorkspace();
+	const refresh = useRefreshBusiness();
+	const setPic = useMutation(
+		orpc.categories.setPic.mutationOptions({ onSuccess: refresh }),
+	);
+	const current = business.categoryPics.find((c) => c.category === category);
+	return (
+		<div className="space-y-0.5">
+			<p className="text-[11px] text-muted-foreground">
+				Default PIC after signing
+			</p>
+			<Select
+				value={current?.defaultPicId ?? "none"}
+				disabled={setPic.isPending}
+				onValueChange={(v) =>
+					setPic.mutate({
+						businessId: business.id,
+						category,
+						staffId: v === "none" ? null : v,
+					})
+				}
+			>
+				<SelectTrigger size="sm" className="w-52 bg-card">
+					<SelectValue />
+				</SelectTrigger>
+				<SelectContent position="popper">
+					<SelectItem value="none">Not set (first approver)</SelectItem>
+					{business.staff.map((s) => (
+						<SelectItem key={s.id} value={s.id}>
+							{s.name} · {s.role}
+						</SelectItem>
+					))}
+				</SelectContent>
+			</Select>
 		</div>
 	);
 }

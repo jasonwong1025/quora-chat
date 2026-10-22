@@ -13,6 +13,7 @@ import { Fragment, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { z } from "zod";
 import { AiThinking } from "#/components/orbyte/ai-thinking";
+import { RelayApproval } from "#/components/orbyte/relay-approval";
 import { RequestDetail } from "#/components/orbyte/request-detail";
 import { useWorkspace } from "#/components/orbyte/workspace";
 import { StatusBadge } from "#/components/status-badge";
@@ -37,6 +38,11 @@ function Inbox() {
 		refetchInterval: 2000,
 	});
 	const selected = inbox.data?.find((x) => x.id === c);
+	const pending = useQuery({
+		...orpc.relays.pending.queryOptions({ input: { businessId: business.id } }),
+		refetchInterval: 4000,
+	});
+	const needsApproval = new Set(pending.data?.map((r) => r.conversationId));
 
 	return (
 		<div className="flex h-full min-h-0">
@@ -57,6 +63,7 @@ function Inbox() {
 						<li key={row.id}>
 							<ChatRow
 								row={row}
+								needsApproval={needsApproval.has(row.id)}
 								active={row.id === c}
 								onClick={() => navigate({ search: { c: row.id } })}
 							/>
@@ -127,6 +134,7 @@ function ModePill({ row }: { row: InboxRow }) {
 
 function ChatRow(props: {
 	row: InboxRow;
+	needsApproval: boolean;
 	active: boolean;
 	onClick: () => void;
 }) {
@@ -155,6 +163,11 @@ function ChatRow(props: {
 					<ModePill row={row} />
 					{row.latestRequest && (
 						<StatusBadge status={row.latestRequest.status} />
+					)}
+					{props.needsApproval && (
+						<span className="rounded-full bg-[var(--orb-royal)] px-2 py-0.5 text-[11px] font-medium text-white">
+							Approve question
+						</span>
 					)}
 					{row.awaitingReply && (
 						<span className="ml-auto size-2 rounded-full bg-[var(--orb-royal)]" />
@@ -192,6 +205,8 @@ function Conversation({ row, onBack }: { row: InboxRow; onBack: () => void }) {
 	);
 
 	const messages = conversation.data?.messages ?? [];
+	const relays = conversation.data?.relays ?? [];
+	const pendingRelays = relays.filter((r) => r.status === "pending");
 	const runs = conversation.data?.runs ?? [];
 	const latestRunId = runs.at(-1)?.id;
 	const bottomRef = useRef<HTMLDivElement>(null);
@@ -290,6 +305,17 @@ function Conversation({ row, onBack }: { row: InboxRow; onBack: () => void }) {
 											<>
 												<UserRound className="size-3" />{" "}
 												{m.authorName ?? "Staff"}
+												{(() => {
+													const r = relays.find(
+														(x) => x.status !== "pending" && x.draft === m.body,
+													);
+													return r ? (
+														<span className="font-normal opacity-80">
+															{" "}
+															· for {r.askedBy ?? "PIC"} ({r.jobNumber})
+														</span>
+													) : null;
+												})()}
 											</>
 										)}
 									</p>
@@ -364,6 +390,13 @@ function Conversation({ row, onBack }: { row: InboxRow; onBack: () => void }) {
 				</div>
 			</div>
 
+			{pendingRelays.length > 0 && (
+				<div className="space-y-2 border-t bg-card px-3 pt-3">
+					{pendingRelays.map((r) => (
+						<RelayApproval key={r.id} relay={r} />
+					))}
+				</div>
+			)}
 			<div className="border-t bg-card p-3">
 				{!mine && (
 					<p className="mb-2 flex items-center gap-1.5 text-xs text-muted-foreground">

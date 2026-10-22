@@ -51,9 +51,10 @@ async function main() {
 				sstRateBps: b.sstRateBps,
 				quoteValidityDays: b.quoteValidityDays,
 			});
-			await tx
+			const staff = await tx
 				.insert(schema.staff)
-				.values(b.staff.map((s) => ({ ...s, businessId: b.id })));
+				.values(b.staff.map((s) => ({ ...s, businessId: b.id })))
+				.returning();
 			await tx.insert(schema.products).values(
 				b.products.map(({ questions: _q, ...p }) => ({
 					...p,
@@ -75,6 +76,12 @@ async function main() {
 			];
 			if (questions.length)
 				await tx.insert(schema.intakeQuestions).values(questions);
+			const pics = Object.entries(b.categoryPics).map(([category, name]) => {
+				const pic = staff.find((s) => s.name === name);
+				if (!pic) throw new Error(`${b.id}: no staff named ${name}`);
+				return { businessId: b.id, category, defaultPicId: pic.id };
+			});
+			if (pics.length) await tx.insert(schema.categorySettings).values(pics);
 			await tx
 				.insert(schema.pricingRules)
 				.values(b.rules.map((r) => ({ ...r, businessId: b.id })));

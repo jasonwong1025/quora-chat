@@ -60,6 +60,8 @@ type DemoBusiness = {
 	sstRateBps: number;
 	quoteValidityDays: number;
 	staff: { name: string; role: string; canApprove: boolean }[];
+	/** Who gets the job when a quote in this category is signed (staff name). */
+	categoryPics: Record<string, string>;
 	/** Asked in every enquiry, once we know what they want. */
 	businessQuestions: DemoQuestion[];
 	/** Shared by every product in a category. */
@@ -131,7 +133,16 @@ export const demoBusinesses: DemoBusiness[] = [
 		staff: [
 			{ name: "Aina Rahman", role: "Owner", canApprove: true },
 			{ name: "Lim Wei Jie", role: "Counter staff", canApprove: false },
+			{ name: "Ravi Chandran", role: "Production lead", canApprove: false },
 		],
+		categoryPics: {
+			Flyers: "Ravi Chandran",
+			"Name cards": "Ravi Chandran",
+			Banners: "Ravi Chandran",
+			Services: "Ravi Chandran",
+			"Display stands": "Lim Wei Jie",
+			Boards: "Lim Wei Jie",
+		},
 		businessQuestions: [
 			{
 				key: "needed_by",
@@ -470,7 +481,15 @@ export const demoBusinesses: DemoBusiness[] = [
 			{ name: "Kumar Selvam", role: "Owner", canApprove: true },
 			{ name: "Nurul Izzah", role: "Admin", canApprove: true },
 			{ name: "Danial Haris", role: "Technician", canApprove: false },
+			{ name: "Faiz Rahim", role: "Store & logistics", canApprove: false },
 		],
+		categoryPics: {
+			Servicing: "Danial Haris",
+			Repair: "Danial Haris",
+			Installation: "Danial Haris",
+			"Aircon units": "Faiz Rahim",
+			Parts: "Faiz Rahim",
+		},
 		businessQuestions: [
 			{
 				key: "service_area",
@@ -694,7 +713,17 @@ export const demoBusinesses: DemoBusiness[] = [
 		staff: [
 			{ name: "Farid Ismail", role: "Owner", canApprove: true },
 			{ name: "Grace Wong", role: "Coordinator", canApprove: false },
+			{ name: "Ah Seng Lee", role: "Site supervisor", canApprove: false },
 		],
+		categoryPics: {
+			Painting: "Ah Seng Lee",
+			Tiling: "Ah Seng Lee",
+			Plumbing: "Ah Seng Lee",
+			Doors: "Ah Seng Lee",
+			Handyman: "Ah Seng Lee",
+			Waterproofing: "Ah Seng Lee",
+			Materials: "Grace Wong",
+		},
 		businessQuestions: [
 			{
 				key: "property_location",
@@ -957,7 +986,14 @@ export const demoBusinesses: DemoBusiness[] = [
 			{ name: "Hakim Zulkifli", role: "Founder", canApprove: true },
 			{ name: "Priya Nair", role: "Project manager", canApprove: true },
 			{ name: "Ong Jia Hui", role: "Sales executive", canApprove: false },
+			{ name: "Daniel Tan", role: "Backend Developer", canApprove: false },
+			{ name: "Siti Aminah", role: "Frontend Developer", canApprove: false },
 		],
+		categoryPics: {
+			Systems: "Priya Nair",
+			Websites: "Siti Aminah",
+			Support: "Daniel Tan",
+		},
 		businessQuestions: [
 			{
 				key: "company_name",
@@ -1337,7 +1373,13 @@ export const demoBusinesses: DemoBusiness[] = [
 			{ name: "Nor Aisyah Kamal", role: "Audit partner", canApprove: true },
 			{ name: "Tan Mei Xin", role: "Tax manager", canApprove: true },
 			{ name: "Arif Danish", role: "Associate", canApprove: false },
+			{ name: "Kavitha Raj", role: "Audit senior", canApprove: false },
 		],
+		categoryPics: {
+			Audit: "Kavitha Raj",
+			Tax: "Tan Mei Xin",
+			Bookkeeping: "Arif Danish",
+		},
 		businessQuestions: [
 			{
 				key: "company_name",

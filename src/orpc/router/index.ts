@@ -15,6 +15,15 @@ import { getDemoBusiness } from "#/data/demo";
 import { getDb, schema } from "#/db";
 import { suggestSku, uniqueSku } from "#/lib/sku";
 import { suggestQuestions } from "#/server/ai";
+import {
+	addTask,
+	askJobAssistant,
+	prepareHandover,
+	requestCustomerAnswer,
+	reviewRelay,
+	updateJob,
+	updateTask,
+} from "#/server/jobs";
 import { emitOrbyteEvent } from "#/server/orbyte";
 import {
 	askNow,
@@ -55,7 +64,7 @@ const getBusiness = os.input(businessInput).handler(async ({ input }) => {
 	});
 	if (!business) throw new ORPCError("NOT_FOUND");
 	const { image, ...productColumns } = getTableColumns(schema.products);
-	const [products, rules, staff, questions] = await Promise.all([
+	const [products, rules, staff, questions, categoryPics] = await Promise.all([
 		db
 			.select({
 				...productColumns,
@@ -81,6 +90,10 @@ const getBusiness = os.input(businessInput).handler(async ({ input }) => {
 				asc(schema.intakeQuestions.position),
 				asc(schema.intakeQuestions.createdAt),
 			),
+		db
+			.select()
+			.from(schema.categorySettings)
+			.where(eq(schema.categorySettings.businessId, business.id)),
 	]);
 	return {
 		...business,
@@ -88,6 +101,7 @@ const getBusiness = os.input(businessInput).handler(async ({ input }) => {
 		rules,
 		staff,
 		questions,
+		categoryPics,
 		sampleMessages: getDemoBusiness(business.id)?.sampleMessages ?? [],
 	};
 });
@@ -143,7 +157,30 @@ const getConversation = os
 			where: eq(schema.aiRuns.conversationId, conversation.id),
 			orderBy: asc(schema.aiRuns.createdAt),
 		});
-		return { ...conversation, messages, quotes, runs };
+		const relays = await db
+			.select({
+				relay: schema.relays,
+				jobNumber: schema.jobs.number,
+				jobTitle: schema.jobs.title,
+				askedBy: schema.staff.name,
+			})
+			.from(schema.relays)
+			.innerJoin(schema.jobs, eq(schema.relays.jobId, schema.jobs.id))
+			.leftJoin(schema.staff, eq(schema.relays.askedById, schema.staff.id))
+			.where(eq(schema.relays.conversationId, conversation.id))
+			.orderBy(asc(schema.relays.createdAt));
+		return {
+			...conversation,
+			messages,
+			quotes,
+			runs,
+			relays: relays.map((r) => ({
+				...r.relay,
+				jobNumber: r.jobNumber,
+				jobTitle: r.jobTitle,
+				askedBy: r.askedBy,
+			})),
+		};
 	});
 
 /** Streams workflow progress so the UI can show each step as it happens. */
@@ -1072,6 +1109,291 @@ const draftRequestNow = os
 	.input(z.object({ requestId: z.string(), staffId: z.string() }))
 	.handler(({ input }) => draftNow(input).catch(fail));
 
+// --- Orbyte Work: jobs handed over after signing ----------------------------------------
+
+const jobStatusInput = z.enum(["upcoming", "active", "completed", "closed"]);
+
+const listJobs = os.input(businessInput).handler(async ({ input }) => {
+	const db = getDb();
+	const rows = await db
+		.select({
+			job: schema.jobs,
+			clientName: schema.clients.name,
+			picName: schema.staff.name,
+		})
+		.from(schema.jobs)
+		.innerJoin(schema.clients, eq(schema.jobs.clientId, schema.clients.id))
+		.leftJoin(schema.staff, eq(schema.jobs.picId, schema.staff.id))
+		.where(eq(schema.jobs.businessId, input.businessId))
+		.orderBy(desc(schema.jobs.createdAt));
+	const ids = rows.map((r) => r.job.id);
+	const [tasks, relays] = ids.length
+		? await Promise.all([
+				db
+					.select({
+						jobId: schema.jobTasks.jobId,
+						status: schema.jobTasks.status,
+					})
+					.from(schema.jobTasks)
+					.where(inArray(schema.jobTasks.jobId, ids)),
+				db
+					.select({ jobId: schema.relays.jobId, status: schema.relays.status })
+					.from(schema.relays)
+					.where(inArray(schema.relays.jobId, ids)),
+			])
+		: [[], []];
+	return rows.map(({ job, clientName, picName }) => {
+		const own = tasks.filter((t) => t.jobId === job.id);
+		return {
+			...job,
+			clientName,
+			picName,
+			tasksTotal: own.length,
+			tasksDone: own.filter((t) => t.status === "done").length,
+			blocked: own.filter((t) => t.status === "blocked").length,
+			waitingOnCustomer: relays.filter(
+				(r) =>
+					r.jobId === job.id && (r.status === "pending" || r.status === "sent"),
+			).length,
+		};
+	});
+});
+
+const getJob = os
+	.input(z.object({ jobId: z.string() }))
+	.handler(async ({ input }) => {
+		const db = getDb();
+		const job = await db.query.jobs.findFirst({
+			where: eq(schema.jobs.id, input.jobId),
+		});
+		if (!job) throw new ORPCError("NOT_FOUND");
+		const [client, quote, request, tasks, chat, relays, messages, staff] =
+			await Promise.all([
+				db.query.clients.findFirst({
+					where: eq(schema.clients.id, job.clientId),
+				}),
+				db.query.quotes.findFirst({ where: eq(schema.quotes.id, job.quoteId) }),
+				db.query.quoteRequests.findFirst({
+					where: eq(schema.quoteRequests.id, job.requestId),
+				}),
+				db
+					.select()
+					.from(schema.jobTasks)
+					.where(eq(schema.jobTasks.jobId, job.id))
+					.orderBy(
+						asc(schema.jobTasks.position),
+						asc(schema.jobTasks.createdAt),
+					),
+				db
+					.select()
+					.from(schema.jobChat)
+					.where(eq(schema.jobChat.jobId, job.id))
+					.orderBy(asc(schema.jobChat.createdAt)),
+				db
+					.select()
+					.from(schema.relays)
+					.where(eq(schema.relays.jobId, job.id))
+					.orderBy(asc(schema.relays.createdAt)),
+				db
+					.select(messageColumns)
+					.from(schema.messages)
+					.where(eq(schema.messages.conversationId, job.conversationId))
+					.orderBy(asc(schema.messages.createdAt)),
+				db
+					.select({ id: schema.staff.id, name: schema.staff.name })
+					.from(schema.staff)
+					.where(eq(schema.staff.businessId, job.businessId)),
+			]);
+		if (!client || !quote || !request) throw new ORPCError("NOT_FOUND");
+		const nameOf = (id: string | null) =>
+			staff.find((s) => s.id === id)?.name ?? null;
+		return {
+			...job,
+			client,
+			quote: {
+				id: quote.id,
+				number: quote.number,
+				lineItems: quote.lineItems,
+				subtotalSen: quote.subtotalSen,
+				sstSen: quote.sstSen,
+				totalSen: quote.totalSen,
+				notes: quote.notes,
+				signerName: quote.signerName,
+				signedAt: quote.signedAt,
+			},
+			brief: request.brief,
+			tasks,
+			chat,
+			relays: relays.map((r) => ({
+				...r,
+				askedBy: nameOf(r.askedById),
+				reviewedBy: nameOf(r.reviewedById),
+			})),
+			messages,
+		};
+	});
+
+const updateJobInput = os
+	.input(
+		z.object({
+			jobId: z.string(),
+			staffId: z.string(),
+			status: jobStatusInput.optional(),
+			picId: z.string().nullable().optional(),
+		}),
+	)
+	.handler(({ input }) => updateJob(input).catch(fail));
+
+const retryHandover = os
+	.input(z.object({ jobId: z.string() }))
+	.handler(({ input }) =>
+		prepareHandover(input.jobId)
+			.then(() => ({ ok: true }))
+			.catch(fail),
+	);
+
+const addJobTask = os
+	.input(
+		z.object({
+			jobId: z.string(),
+			staffId: z.string(),
+			title: z.string().trim().min(1).max(200),
+			source: z.enum(["staff", "bot"]).optional(),
+		}),
+	)
+	.handler(({ input }) => addTask(input).catch(fail));
+
+const updateJobTask = os
+	.input(
+		z.object({
+			taskId: z.string(),
+			status: z.enum(["todo", "active", "blocked", "done"]).optional(),
+			note: z.string().max(500).nullable().optional(),
+			title: z.string().trim().min(1).max(200).optional(),
+		}),
+	)
+	.handler(({ input }) => updateTask(input).catch(fail));
+
+const deleteJobTask = os
+	.input(z.object({ taskId: z.string() }))
+	.handler(async ({ input }) => {
+		await getDb()
+			.delete(schema.jobTasks)
+			.where(eq(schema.jobTasks.id, input.taskId));
+		return { ok: true };
+	});
+
+const askJob = os
+	.input(
+		z.object({
+			jobId: z.string(),
+			staffId: z.string(),
+			question: z.string().trim().min(1).max(1000),
+		}),
+	)
+	.handler(({ input }) => askJobAssistant(input).catch(fail));
+
+const createRelay = os
+	.input(
+		z.object({
+			jobId: z.string(),
+			staffId: z.string(),
+			question: z.string().trim().min(1).max(500),
+		}),
+	)
+	.handler(({ input }) => requestCustomerAnswer(input).catch(fail));
+
+const reviewRelayInput = os
+	.input(
+		z.object({
+			relayId: z.string(),
+			staffId: z.string(),
+			action: z.enum(["send", "reject"]),
+			draft: z.string().max(2000).optional(),
+			reason: z.string().max(300).optional(),
+		}),
+	)
+	.handler(({ input }) => reviewRelay(input).catch(fail));
+
+/** Signed quotes waiting on sales to approve a PIC's question, across the business. */
+const pendingRelays = os.input(businessInput).handler(({ input }) =>
+	getDb()
+		.select({
+			id: schema.relays.id,
+			conversationId: schema.relays.conversationId,
+		})
+		.from(schema.relays)
+		.where(
+			and(
+				eq(schema.relays.businessId, input.businessId),
+				eq(schema.relays.status, "pending"),
+			),
+		),
+);
+
+// --- Notifications ----------------------------------------------------------------------
+
+const listNotifications = os
+	.input(businessInput.extend({ staffId: z.string() }))
+	.handler(({ input }) =>
+		getDb()
+			.select()
+			.from(schema.notifications)
+			.where(
+				and(
+					eq(schema.notifications.businessId, input.businessId),
+					eq(schema.notifications.staffId, input.staffId),
+				),
+			)
+			.orderBy(desc(schema.notifications.createdAt))
+			.limit(30),
+	);
+
+const readNotifications = os
+	.input(z.object({ staffId: z.string(), ids: z.array(z.string()).optional() }))
+	.handler(async ({ input }) => {
+		await getDb()
+			.update(schema.notifications)
+			.set({ readAt: new Date() })
+			.where(
+				and(
+					eq(schema.notifications.staffId, input.staffId),
+					input.ids?.length
+						? inArray(schema.notifications.id, input.ids)
+						: undefined,
+				),
+			);
+		return { ok: true };
+	});
+
+// --- Default PIC per category ---------------------------------------------------------
+
+const setCategoryPic = os
+	.input(
+		businessInput.extend({
+			category: z.string().min(1),
+			staffId: z.string().nullable(),
+		}),
+	)
+	.handler(async ({ input }) => {
+		const db = getDb();
+		await db
+			.insert(schema.categorySettings)
+			.values({
+				businessId: input.businessId,
+				category: input.category,
+				defaultPicId: input.staffId,
+			})
+			.onConflictDoUpdate({
+				target: [
+					schema.categorySettings.businessId,
+					schema.categorySettings.category,
+				],
+				set: { defaultPicId: input.staffId },
+			});
+		return { ok: true };
+	});
+
 export default {
 	businesses: { list: listBusinesses, get: getBusiness },
 	conversations: {
@@ -1106,5 +1428,20 @@ export default {
 		suggest: suggestPresetQuestions,
 	},
 	quotes: { get: getQuote, update: updateQuote, decide },
+	jobs: {
+		list: listJobs,
+		get: getJob,
+		update: updateJobInput,
+		retryHandover,
+		ask: askJob,
+		tasks: { add: addJobTask, update: updateJobTask, delete: deleteJobTask },
+	},
+	relays: {
+		create: createRelay,
+		review: reviewRelayInput,
+		pending: pendingRelays,
+	},
+	notifications: { list: listNotifications, read: readNotifications },
+	categories: { setPic: setCategoryPic },
 	activity: { list: listActivity },
 };

@@ -19,6 +19,7 @@ import {
 	X,
 } from "lucide-react";
 import { useState } from "react";
+import { NotificationBell } from "#/components/orbyte/notification-bell";
 import { useWorkspace, WorkspaceProvider } from "#/components/orbyte/workspace";
 import {
 	Select,
@@ -73,7 +74,7 @@ type NavItem = {
 };
 
 function Shell() {
-	const { business } = useWorkspace();
+	const { business, me } = useWorkspace();
 	const [open, setOpen] = useState(false);
 	const location = useLocation();
 
@@ -85,7 +86,23 @@ function Shell() {
 		...orpc.requests.list.queryOptions({ input: { businessId: business.id } }),
 		refetchInterval: 4000,
 	});
-	const awaiting = inbox.data?.filter((c) => c.awaitingReply).length ?? 0;
+	const jobs = useQuery({
+		...orpc.jobs.list.queryOptions({ input: { businessId: business.id } }),
+		refetchInterval: 4000,
+	});
+	const approvals = useQuery({
+		...orpc.relays.pending.queryOptions({ input: { businessId: business.id } }),
+		refetchInterval: 4000,
+	});
+	const myOpenJobs =
+		jobs.data?.filter(
+			(j) =>
+				j.picId === me?.id &&
+				["preparing", "upcoming", "active"].includes(j.status),
+		).length ?? 0;
+	const awaiting =
+		(inbox.data?.filter((c) => c.awaitingReply).length ?? 0) +
+		(approvals.data?.length ?? 0);
 	const toReview =
 		requests.data?.filter((r) =>
 			["needs_review", "draft_ready"].includes(r.status),
@@ -106,7 +123,12 @@ function Shell() {
 			title: "Modules",
 			items: [
 				{ to: "/orbyte/$businessId/people", label: "People", icon: Users },
-				{ to: "/orbyte/$businessId/work", label: "Work", icon: ListChecks },
+				{
+					to: "/orbyte/$businessId/work",
+					label: "Work",
+					icon: ListChecks,
+					count: myOpenJobs,
+				},
 				{ to: "/orbyte/$businessId/esign", label: "eSign", icon: PenLine },
 				{ to: "/orbyte/$businessId/connect", label: "Connect", icon: Plug },
 			],
@@ -145,12 +167,15 @@ function Shell() {
 
 	const sidebar = (
 		<nav className="flex h-full flex-col gap-1 bg-[var(--orb-navy)] p-3 text-white">
-			<Link to="/" className="flex items-center gap-2 px-2 py-2">
-				<span className="flex size-8 items-center justify-center rounded-lg bg-white">
-					<img src="/orbyte-icon.png" alt="" className="size-6" />
-				</span>
-				<span className="text-lg font-semibold tracking-tight">Orbyte</span>
-			</Link>
+			<div className="flex items-center gap-2 px-2 py-2">
+				<Link to="/" className="flex items-center gap-2">
+					<span className="flex size-8 items-center justify-center rounded-lg bg-white">
+						<img src="/orbyte-icon.png" alt="" className="size-6" />
+					</span>
+					<span className="text-lg font-semibold tracking-tight">Orbyte</span>
+				</Link>
+				<NotificationBell />
+			</div>
 			<BusinessSwitcher />
 			<div className="mt-2 min-h-0 flex-1 space-y-4 overflow-y-auto">
 				{groups.map((g) => (

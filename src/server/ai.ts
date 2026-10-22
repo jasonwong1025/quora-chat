@@ -253,6 +253,7 @@ export type ReplyPlan =
 	| { stage: "gathering"; asks: Ask[] }
 	| { stage: "confirming"; summary: string[]; isRevision: boolean }
 	| { stage: "drafted"; customPriced: boolean; isRevision: boolean }
+	| { stage: "relay_thanks" }
 	| { stage: "chat" };
 
 export type ReplyInput = {
@@ -296,6 +297,8 @@ function planText(plan: ReplyPlan) {
 			return plan.customPriced
 				? "They confirmed. Our team will go through the details and send the quotation, usually within 1 working day. Thank them briefly."
 				: `They confirmed. Say we're preparing the ${plan.isRevision ? "updated " : ""}quotation and our team will send it here once checked, usually within the hour. Thank them briefly.`;
+		case "relay_thanks":
+			return "They just answered a question our team asked about their job. Thank them briefly and say you'll pass it to the team. Nothing else.";
 		case "chat":
 			return "There is nothing new to ask. Reply briefly and naturally to what they just said.";
 	}
@@ -317,7 +320,7 @@ export async function writeReply(input: ReplyInput): Promise<string> {
 
 How to write:
 - Reply in ${languageName[input.language]}, matching the customer's register. If they write casual Manglish or rojak, you can be casual too (a light "ya", "can", "boleh", "ok noted" is fine; don't overdo "lah"). If they're formal, be polite. For Bahasa Melayu use everyday Malay, not stiff textbook Malay. For Chinese use natural simplified Chinese.
-- ${input.firstReply ? `This is your first reply, so a short hello is fine${input.customerName ? ` (their name: ${input.customerName}; use it only if it looks like a real name)` : ""}.` : "Don't greet again; you're mid-conversation."}
+- ${input.firstReply ? `This is your first reply, so a short hello is fine${input.customerName ? ` (their name: ${input.customerName}; if you use it, write it exactly like that, never shortened)` : ""}.` : "Don't greet again; you're mid-conversation."}
 - Briefly acknowledge what they just said when it helps (a few words, e.g. "Ok, 500 pcs noted"), then get to the point. Don't open every message with "Thank you" or "Great!".
 - Ask only what you're told to ask, in one flowing message. Offer options the way people talk ("single or double sided?"), not like a form. If there are two questions, a tiny numbered list is ok.
 - Usually 1-3 short sentences. Keep it under ~60 words, except a recap list.
@@ -443,4 +446,240 @@ Rules:
 		"Suggest the questions.",
 	);
 	return result.questions;
+}
+
+// --- Handover to the PIC --------------------------------------------------------------
+
+/** Everything the business knows about one signed job, as plain text for the AI. */
+export type JobContext = {
+	businessName: string;
+	industry: string;
+	customerName: string;
+	clientName: string;
+	jobKind: string;
+	language: Language;
+	brief: string[]; // "Item — question → answer" lines
+	quote: string[]; // signed quotation lines
+	files: { ref: string; name: string }[];
+	/** The WhatsApp conversation; ref is a short id the AI can cite. */
+	chat: { ref: string; who: string; at: string; body: string }[];
+	catalog: string[]; // descriptions of the products involved
+};
+
+function contextText(c: JobContext) {
+	return `Business: ${c.businessName} (${c.industry}, Malaysia)
+Client: ${c.clientName} (contact: ${c.customerName}; customer writes in ${languageName[c.language]})
+Job type: ${c.jobKind}
+
+Requirement brief (confirmed by the customer before quoting):
+${c.brief.map((l) => `- ${l}`).join("\n") || "(none)"}
+
+Signed quotation:
+${c.quote.map((l) => `- ${l}`).join("\n") || "(none)"}
+
+Files the customer sent:
+${c.files.map((f) => `- [${f.ref}] ${f.name}`).join("\n") || "(none)"}
+
+Products involved:
+${c.catalog.map((l) => `- ${l}`).join("\n") || "(none)"}
+
+WhatsApp conversation (each line has a reference id in brackets):
+${c.chat.map((m) => `[${m.ref}] ${m.at} ${m.who}: ${m.body}`).join("\n")}`;
+}
+
+const handoverSchema = z.object({
+	title: z.string(),
+	summary: z.string(),
+	scope: z.array(z.string()),
+	requirements: z.array(z.object({ label: z.string(), value: z.string() })),
+	promises: z.array(z.string()),
+	timeline: z.string().nullable(),
+	watchOuts: z.array(z.string()),
+	customerNotes: z.string().nullable(),
+	tasks: z.array(z.string()),
+});
+
+export type HandoverDraft = z.infer<typeof handoverSchema>;
+
+/** Writes the PIC's briefing and a starting task list from the chat, brief and quote. */
+export function writeHandover(c: JobContext): Promise<HandoverDraft> {
+	return structured(
+		"handover",
+		obj({
+			title: str,
+			summary: str,
+			scope: strList,
+			requirements: {
+				type: "array",
+				items: obj({ label: str, value: str }),
+			},
+			promises: strList,
+			timeline: strOrNull,
+			watchOuts: strList,
+			customerNotes: strOrNull,
+			tasks: strList,
+		}),
+		handoverSchema,
+		`You brief the person in charge (PIC) who will deliver a job a customer just signed for. The PIC never talks to the customer and wasn't in the chat, so give them everything they need. Write in plain, specific English. Only use facts from the context; never invent details or prices.
+
+Return:
+- title: short job title, e.g. "Inventory & sales order system for Syarikat Contoh".
+- summary: 2-4 sentences: who the customer is, what they bought, and what success looks like for them.
+- scope: the deliverables, one per line.
+- requirements: the key facts about the work itself that the PIC must follow (label → value), e.g. paper type, number of users, go-live date, site address. Never include the customer's name, quotation number, totals, validity, product codes or how they found us; those are shown elsewhere.
+- promises: anything we told or agreed with the customer in the chat (timelines, what's included, what they will send). Empty if none.
+- timeline: the deadline or timing in the customer's words, or null.
+- watchOuts: risks, open points, vague answers, things to confirm. Empty if none.
+- customerNotes: how to deal with them (language, tone, anything notable), or null.
+- tasks: 3-8 concrete first tasks for the PIC, verb first (e.g. "Set up the staging environment"). The PIC must not contact the customer directly: anything that needs the customer becomes "Ask the customer (via sales): …". Stock on the quote is already reserved automatically when the customer signed, so don't add tasks to reserve or check stock.`,
+		contextText(c),
+	);
+}
+
+const botSchema = z.object({
+	answer: z.string(),
+	known: z.boolean(),
+	sources: z.array(
+		z.object({
+			kind: z.enum([
+				"chat",
+				"brief",
+				"quote",
+				"handover",
+				"file",
+				"relay",
+				"catalog",
+			]),
+			label: z.string(),
+			ref: z.string().nullable(),
+		}),
+	),
+	actions: z.array(
+		z.object({
+			kind: z.enum(["add_task", "flag_blocker", "ask_customer"]),
+			text: z.string(),
+			taskId: z.string().nullable(),
+		}),
+	),
+});
+
+export type BotReply = z.infer<typeof botSchema>;
+
+/** The PIC's assistant: answers from the job's context and suggests next steps. */
+export function answerJobQuestion(input: {
+	context: JobContext;
+	handover: string;
+	tasks: { id: string; title: string; status: string }[];
+	relays: { question: string; answer: string | null; status: string }[];
+	history: { role: "pic" | "assistant"; body: string }[];
+	question: string;
+	picName: string;
+}): Promise<BotReply> {
+	return structured(
+		"job_assistant",
+		obj({
+			answer: str,
+			known: { type: "boolean" },
+			sources: {
+				type: "array",
+				items: obj({
+					kind: {
+						type: "string",
+						enum: [
+							"chat",
+							"brief",
+							"quote",
+							"handover",
+							"file",
+							"relay",
+							"catalog",
+						],
+					},
+					label: str,
+					ref: strOrNull,
+				}),
+			},
+			actions: {
+				type: "array",
+				items: obj({
+					kind: {
+						type: "string",
+						enum: ["add_task", "flag_blocker", "ask_customer"],
+					},
+					text: str,
+					taskId: strOrNull,
+				}),
+			},
+		}),
+		botSchema,
+		`You are the assistant for ${input.picName}, the person in charge of this job. They can't contact the customer directly, so you are their source of truth about what the customer wants. Answer only from the context below. Be direct and brief (usually 1-4 sentences or a short list), like a helpful colleague who read the whole chat.
+
+Rules:
+- If the context answers it, answer and set known=true. Quote exact details (numbers, names, dates) as given.
+- If it doesn't, say clearly that the customer didn't say, set known=false, and suggest an ask_customer action with a clear question we could ask them.
+- sources: where you found it. kind "chat" with ref = the bracketed message id (e.g. "m12"), "file" with the file ref, or "brief" / "quote" / "handover" / "relay" / "catalog" with ref null. label = a few words on what it shows.
+- actions: suggest only when genuinely useful, max 3. add_task (text = task title), flag_blocker (text = what's blocking; taskId = an existing task id if it applies, else null), ask_customer (text = the question for the customer, in plain English). Don't suggest a task that already exists.
+- Never invent facts or prices.
+
+${contextText(input.context)}
+
+Handover pack:
+${input.handover}
+
+Tasks (id: title [status]):
+${input.tasks.map((t) => `- ${t.id}: ${t.title} [${t.status}]`).join("\n") || "(none)"}
+
+Questions already relayed to the customer:
+${input.relays.map((r) => `- ${r.question} → ${r.answer ?? `(${r.status})`}`).join("\n") || "(none)"}`,
+		`${input.history
+			.slice(-8)
+			.map((h) => `${h.role === "pic" ? "PIC" : "ASSISTANT"}: ${h.body}`)
+			.join("\n")}\nPIC: ${input.question}`,
+		"low",
+	);
+}
+
+/** Turns a PIC's internal question into a friendly WhatsApp message from the business. */
+export async function draftCustomerQuestion(input: {
+	businessName: string;
+	customerName: string;
+	language: Language;
+	jobTitle: string;
+	question: string;
+	recentChat: ChatTurn[];
+}): Promise<string> {
+	const res = await getClient().chat.completions.create({
+		model: model(),
+		reasoning_effort: "minimal",
+		messages: [
+			{
+				role: "system",
+				content: `You write WhatsApp messages for "${input.businessName}" (Malaysia) to an existing customer whose job ("${input.jobTitle}") our team has started. Our team needs one detail. Write it in ${languageName[input.language]}, warm and short like a real staff member texting (1-3 sentences), with a brief reason ("so our team can get started on…"). No greeting if the chat is ongoing, no sign-off, no internal jargon or staff names, no prices. Plain text.`,
+			},
+			{
+				role: "user",
+				content: `Recent chat:\n${transcript(input.recentChat.slice(-6))}\n\nWhat our team wants to know: ${input.question}\n\nWrite only the message.`,
+			},
+		],
+	});
+	return res.choices[0]?.message?.content?.trim() || input.question;
+}
+
+/** Does the customer's reply answer the question we relayed? */
+export function readRelayAnswer(input: {
+	question: string;
+	sentMessage: string;
+	reply: string;
+	hasAttachment: boolean;
+}) {
+	return structured(
+		"relay_answer",
+		obj({ answers: { type: "boolean" }, answer: strOrNull }),
+		z.object({ answers: z.boolean(), answer: z.string().nullable() }),
+		`We asked a customer a question on WhatsApp on behalf of our team. Decide whether their reply answers it.
+- answers: true if the reply gives the information asked (even partly, or "don't know"), false if it's about something else.
+- answer: if answers=true, the answer as a short English note for our team (keep exact details; mention an attached file if there is one). Else null.`,
+		`Our team's question: ${input.question}\nMessage we sent: ${input.sentMessage}\nCustomer's reply: ${input.reply}${input.hasAttachment ? " [with a file attached]" : ""}`,
+		"minimal",
+	);
 }
