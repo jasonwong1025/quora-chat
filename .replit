@@ -1,15 +1,16 @@
 run = "pnpm install && pnpm dev"
 modules = ["nodejs-22"]
-
 [[ports]]
 localPort = 3000
 externalPort = 80
-
 [[ports]]
 localPort = 3001
 externalPort = 3001
-
 [deployment]
+# Choose "Reserved VM" in Publishing → Adjust settings → Deployment type: the
+# signing → job handover worker must stay running. Replit updates
+# deploymentTarget when you change the type there. See docs/DEMO.md.
 deploymentTarget = "autoscale"
 build = ["sh", "-c", "pnpm install --frozen-lockfile && pnpm build"]
-run = ["pnpm", "start"]
+# Apply checksummed, additive migrations, then run the web app and the worker together.
+run = ["sh", "-c", "pnpm db:migrate && pnpm start:with-worker"]
