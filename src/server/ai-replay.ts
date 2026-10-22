@@ -40,12 +40,14 @@ class OffScript extends Error {
 
 // --- Reading the scripted customer messages ------------------------------------------------
 
-/** "Jumaat depan" (next Friday): the Friday at least 3 days away, from today in Malaysia. */
+/**
+ * "Jumaat depan" (next Friday): Friday of the following Monday-to-Sunday week,
+ * the same rule the live model is given.
+ */
 function nextFriday(today: string) {
 	const d = new Date(`${today}T00:00:00Z`);
-	let days = (5 - d.getUTCDay() + 7) % 7 || 7;
-	if (days < 3) days += 7;
-	d.setUTCDate(d.getUTCDate() + days);
+	const sinceMonday = (d.getUTCDay() + 6) % 7;
+	d.setUTCDate(d.getUTCDate() - sinceMonday + 7 + 4);
 	return d.toISOString().slice(0, 10);
 }
 
