@@ -516,6 +516,11 @@ const productInput = z.object({
 	unitPriceSen: z.number().int().nonnegative(),
 	pricingMode: z.enum(["fixed", "custom"]),
 	active: z.boolean(),
+	restockDate: z
+		.string()
+		.regex(/^\d{4}-\d{2}-\d{2}$/)
+		.nullable()
+		.optional(),
 });
 
 async function skusOf(businessId: string) {

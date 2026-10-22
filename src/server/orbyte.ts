@@ -17,6 +17,7 @@ export type OrbyteEventType =
 	| "quote.revision.requested"
 	| "quote.superseded"
 	| "quote.request.flagged_for_review"
+	| "quote.request.availability_told"
 	| "quote.draft.prepared"
 	| "quote.draft.edited"
 	| "quote.approved"

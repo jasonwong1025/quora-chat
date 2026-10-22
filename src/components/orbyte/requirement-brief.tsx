@@ -7,6 +7,7 @@ import {
 	FileText,
 	Loader2,
 	MessageCircleQuestion,
+	PackageX,
 	Pencil,
 	Plus,
 	RotateCcw,
@@ -23,6 +24,11 @@ import { Button } from "#/components/ui/button";
 import { Input } from "#/components/ui/input";
 import type { Answer, FollowUp } from "#/db/schema";
 import { quoteAgreementIssue } from "#/lib/agreements";
+import {
+	availabilityIssues,
+	describeIssue,
+	todayInMalaysia,
+} from "#/lib/availability";
 import {
 	answerIssue,
 	answerText,
@@ -105,6 +111,8 @@ export function RequirementBrief({ request }: { request: RequestRow }) {
 	const actions = useBriefActions();
 	const brief = request.brief;
 	const a = assess(brief, business.products, business.questions);
+	const stock = availabilityIssues(brief, business.products, todayInMalaysia());
+	const told = new Set(brief.availabilityTold ?? []);
 	const open = OPEN.includes(request.status);
 	const drafted = Boolean(
 		request.quote?.status === "draft" &&
@@ -193,6 +201,27 @@ export function RequirementBrief({ request }: { request: RequestRow }) {
 				<p className="flex items-start gap-1.5 text-xs text-muted-foreground">
 					<Bot className="mt-px size-3.5 shrink-0" /> {stageText}
 				</p>
+				{open && stock.length > 0 && (
+					<div className="space-y-1 rounded-md bg-status-review/10 px-3 py-2 text-xs">
+						<p className="flex items-center gap-1.5 font-medium">
+							<PackageX className="size-3.5 text-status-review" />
+							Availability
+						</p>
+						<ul className="list-disc space-y-0.5 pl-5">
+							{stock.map((i) => (
+								<li key={i.key}>
+									{describeIssue(i)}
+									{told.has(i.key) && (
+										<span className="text-muted-foreground">
+											{" "}
+											· customer told
+										</span>
+									)}
+								</li>
+							))}
+						</ul>
+					</div>
+				)}
 
 				{a.items.map((view) => (
 					<ItemCard

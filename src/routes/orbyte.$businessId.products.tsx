@@ -57,6 +57,7 @@ import {
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "#/components/ui/tabs";
 import { Textarea } from "#/components/ui/textarea";
 import type { PricingRuleConfig } from "#/db/schema";
+import { formatDay } from "#/lib/availability";
 import { formatMYR, parseMYR } from "#/lib/money";
 import { suggestSku, uniqueSku } from "#/lib/sku";
 import type { PricingRule, Product } from "#/lib/types";
@@ -563,7 +564,7 @@ function ProductRow(props: {
 					{p.type === "stock" ? "Stock item" : "Service"}
 					{!p.active && (
 						<span className="rounded bg-muted px-1.5 text-[10px] font-medium">
-							Hidden from AI
+							Unavailable
 						</span>
 					)}
 				</p>
@@ -616,6 +617,16 @@ function ProductRow(props: {
 						)}
 					>
 						{avail}
+						{avail < 0 && (
+							<p className="text-[11px] font-normal whitespace-nowrap">
+								{-avail} on backorder
+							</p>
+						)}
+						{p.restockDate && (
+							<p className="text-[11px] font-normal whitespace-nowrap text-muted-foreground">
+								Restock {formatDay(p.restockDate)}
+							</p>
+						)}
 					</td>
 				</>
 			) : (
@@ -645,11 +656,11 @@ function ProductRow(props: {
 							<DropdownMenuItem onSelect={() => save({ active: !p.active })}>
 								{p.active ? (
 									<>
-										<EyeOff /> Hide from AI quotes
+										<EyeOff /> Mark unavailable
 									</>
 								) : (
 									<>
-										<Eye /> Show to AI quotes
+										<Eye /> Mark available
 									</>
 								)}
 							</DropdownMenuItem>
@@ -764,7 +775,7 @@ function ProductSheet(props: {
 												: undefined
 										}
 									>
-										{p.active ? "Quotable by AI" : "Hidden from AI"}
+										{p.active ? "Available" : "Unavailable"}
 									</Chip>
 								</div>
 							</div>
@@ -869,9 +880,30 @@ function StockPanel({ product: p }: { product: Product }) {
 	const adjust = useMutation(
 		orpc.products.adjustStock.mutationOptions({ onSuccess: refresh }),
 	);
+	const update = useMutation(
+		orpc.products.update.mutationOptions({ onSuccess: refresh }),
+	);
 	const [action, setAction] = useState<keyof typeof stockActions>("receive");
 	const [qty, setQty] = useState("");
 	const avail = available(p);
+
+	const setRestock = (restockDate: string | null) =>
+		update
+			.mutateAsync({
+				productId: p.id,
+				product: { restockDate },
+				actor: me?.name ?? "Staff",
+			})
+			.then(() =>
+				toast.success(
+					restockDate
+						? `Restock expected ${formatDay(restockDate)}`
+						: "Restock date cleared",
+				),
+			)
+			.catch((err) =>
+				toast.error(err instanceof Error ? err.message : "Not saved"),
+			);
 
 	async function apply() {
 		const quantity = Number(qty);
@@ -910,9 +942,38 @@ function StockPanel({ product: p }: { product: Product }) {
 				))}
 			</div>
 			<p className="mt-2 text-xs text-muted-foreground">
-				Signed quotations reserve stock automatically. Quotes asking for more
-				than is available are flagged for staff review.
+				Signed quotations reserve stock automatically. If a customer asks for
+				more than is available, the AI tells them in the chat straight away
+				(with the restock date below, if set) and staff review the quote.
 			</p>
+			<div className="mt-3 flex items-center justify-between gap-2 text-sm">
+				<span>
+					Next restock expected
+					<span className="block text-xs text-muted-foreground">
+						The AI only gives customers this date. Leave empty if unknown.
+					</span>
+				</span>
+				<span className="flex items-center gap-1">
+					<Input
+						type="date"
+						aria-label="Next restock expected"
+						value={p.restockDate ?? ""}
+						onChange={(e) => setRestock(e.target.value || null)}
+						disabled={update.isPending}
+						className="h-8 w-40 bg-card"
+					/>
+					{p.restockDate && (
+						<Button
+							variant="ghost"
+							size="sm"
+							onClick={() => setRestock(null)}
+							disabled={update.isPending}
+						>
+							Clear
+						</Button>
+					)}
+				</span>
+			</div>
 			<div className="mt-3 space-y-2 rounded-lg bg-muted/60 p-3">
 				<div className="flex gap-2">
 					<Select
@@ -1257,7 +1318,8 @@ function ProductDialog(props: {
 						onChange={(e) => set({ active: e.target.checked })}
 						className="accent-[var(--primary)]"
 					/>
-					Quotable by AI (untick to hide it from quotes)
+					Available (untick when you can't take it on; the AI tells customers
+					it's unavailable)
 				</label>
 
 				<div className="flex justify-end gap-2">

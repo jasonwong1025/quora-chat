@@ -21,6 +21,8 @@ export type IntakeProduct = {
 	category: string;
 	unit: string;
 	pricingMode: "fixed" | "custom";
+	/** Switched off in Products: we tell the customer and don't ask about it. */
+	active?: boolean;
 };
 
 export function emptyBrief(language: Language = "en"): Brief {
@@ -225,6 +227,11 @@ export function assess(
 		if (!product) {
 			// Not in the catalog: staff decide; it does not block the others.
 			items.push({ item, product: null, candidates, questions: [] });
+			continue;
+		}
+		if (product.active === false) {
+			// Not available right now: nothing to ask, staff follow up.
+			items.push({ item, product, candidates, questions: [] });
 			continue;
 		}
 

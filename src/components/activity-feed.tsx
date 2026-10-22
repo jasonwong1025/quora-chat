@@ -7,6 +7,7 @@ const tone: Record<string, string> = {
 	"quote.request.parsed": "bg-status-draft",
 	"quote.request.clarification_requested": "bg-status-clarify",
 	"quote.request.flagged_for_review": "bg-status-review",
+	"quote.request.availability_told": "bg-status-review",
 	"quote.processing_failed": "bg-destructive",
 	"quote.draft.prepared": "bg-status-draft",
 	"quote.draft.edited": "bg-status-draft",

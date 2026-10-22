@@ -70,6 +70,8 @@ export const products = pgTable(
 		// Stock items only. Available = on hand − reserved (reserved when a customer signs).
 		stockOnHand: integer("stock_on_hand").default(0).notNull(),
 		stockReserved: integer("stock_reserved").default(0).notNull(),
+		// Stock items only: when the next stock is expected (YYYY-MM-DD). The AI only quotes this date.
+		restockDate: text("restock_date"),
 		image: text("image"), // small data URL; served from /api/products/:id/image
 	},
 	(t) => [uniqueIndex("products_business_sku").on(t.businessId, t.sku)],
@@ -265,6 +267,8 @@ export type Brief = {
 	asked: string[];
 	/** Set while the customer is changing a quote that was already sent. */
 	revisionOf?: string | null;
+	/** Stock or availability problems already told to the customer (see `availabilityIssues`). */
+	availabilityTold?: string[];
 };
 
 export type Flag = {
@@ -273,6 +277,7 @@ export type Flag = {
 		| "custom_pricing"
 		| "needs_assessment"
 		| "insufficient_stock"
+		| "unavailable"
 		| "ai_uncertain";
 	message: string;
 	itemIndex?: number;
@@ -329,6 +334,8 @@ export type LineItem = {
 	unitPriceSen: number;
 	amountSen: number;
 	notes?: string;
+	/** Units still to come from restock; the customer agreed to wait, so signing reserves them anyway. */
+	backorder?: number;
 };
 
 export const quoteStatus = pgEnum("quote_status", [

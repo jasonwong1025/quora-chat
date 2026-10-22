@@ -673,7 +673,11 @@ async function deliverStock(
 			.where(eq(schema.products.id, reservation.productId))
 			.for("update");
 		const n = reservation.quantity;
-		if (!p || p.stockReserved < n || p.stockOnHand < n)
+		if (p && p.stockReserved >= n && p.stockOnHand < n)
+			throw new Error(
+				`${p.name}: only ${p.stockOnHand} ${p.unit} on hand for ${n} reserved (waiting for restock). Receive the new stock in Products first.`,
+			);
+		if (!p || p.stockReserved < n)
 			throw new Error(
 				"Reserved stock needs reconciliation before this job can be completed",
 			);

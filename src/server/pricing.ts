@@ -9,6 +9,7 @@ import type {
 	LineItem,
 	PricingRuleConfig,
 } from "#/db/schema";
+import { availableStock, formatDay, upcomingRestock } from "#/lib/availability";
 import { isVisible, type Question, questionsFor } from "#/lib/intake";
 import { formatMYR } from "#/lib/money";
 
@@ -23,14 +24,12 @@ export type CatalogProduct = {
 	type?: "stock" | "service";
 	stockOnHand?: number;
 	stockReserved?: number;
+	restockDate?: string | null;
+	/** Switched off in Products: not available, so staff decide. */
+	active?: boolean;
 };
 
-export function availableStock(p: {
-	stockOnHand?: number;
-	stockReserved?: number;
-}) {
-	return (p.stockOnHand ?? 0) - (p.stockReserved ?? 0);
-}
+export { availableStock };
 
 export type CatalogRule = {
 	productId: string | null;
@@ -86,6 +85,7 @@ export function priceBrief(
 	products: CatalogProduct[],
 	rules: CatalogRule[],
 	questions: Question[],
+	today = new Date().toISOString().slice(0, 10),
 ): PricingResult {
 	const byId = new Map(products.map((p) => [p.id, p]));
 	const flags: Flag[] = [];
@@ -102,6 +102,19 @@ export function priceBrief(
 					item.match === "ambiguous"
 						? `"${item.rawText}": customer did not pick between the options.`
 						: `"${item.rawText}" is not in the catalog.`,
+			});
+			return;
+		}
+
+		if (product.active === false) {
+			flags.push({
+				kind: "unavailable",
+				itemIndex,
+				message: `${product.name} is switched off in Products (customer was told it's not available). Add it back or leave it out.`,
+			});
+			explain.push({
+				itemIndex,
+				lines: [`${product.name}: not available right now, left off the quote`],
 			});
 			return;
 		}
@@ -214,16 +227,33 @@ export function priceBrief(
 			notes.push("Price to be confirmed after assessment");
 			log.push(`Needs assessment: ${assessment}`);
 		}
+		let backorder: number | undefined;
 		if (product.type === "stock") {
-			const available = availableStock(product);
+			const available = Math.max(availableStock(product), 0);
 			if (qty > available) {
+				backorder = qty - available;
+				const restock = upcomingRestock(
+					{ restockDate: product.restockDate ?? null },
+					today,
+				);
+				// The customer sees this note: no stock counts, just when it comes.
+				const when = restock
+					? `after restock (expected ${formatDay(restock)})`
+					: "after restock";
+				notes.push(
+					available > 0 ? `Part now, the rest ${when}` : `Available ${when}`,
+				);
 				flags.push({
 					kind: "insufficient_stock",
 					itemIndex,
-					message: `${product.name}: only ${Math.max(available, 0)} ${product.unit} available, customer wants ${qty}.`,
+					message: `${product.name}: only ${available} ${product.unit} available, customer wants ${qty} (customer was told). ${
+						restock
+							? `Restock expected ${formatDay(restock)}.`
+							: "No restock date set: confirm when the rest can come."
+					}`,
 				});
 				log.push(
-					`Stock: only ${Math.max(available, 0)} available for ${qty} needed — flagged for staff`,
+					`Stock: only ${available} available for ${qty} needed — ${backorder} on backorder, flagged for staff`,
 				);
 			} else {
 				log.push(`Stock: ${available} available, enough for ${qty}`);
@@ -239,6 +269,7 @@ export function priceBrief(
 			unitPriceSen,
 			amountSen,
 			notes: notes.length ? notes.join(" · ") : undefined,
+			...(backorder ? { backorder } : {}),
 		});
 	});
 

@@ -33,6 +33,12 @@ import {
 	quoteAgreementIssue,
 	quoteReviewToken,
 } from "#/lib/agreements";
+import {
+	type AvailabilityIssue,
+	availabilityIssues,
+	describeIssue,
+	recapNote,
+} from "#/lib/availability";
 import { resolveRelativeDate } from "#/lib/dates";
 import {
 	type Assessment,
@@ -65,7 +71,7 @@ import {
 	onQuoteSent,
 	todayMY,
 } from "./followups";
-import { matchRelayAnswer } from "./jobs";
+import { matchRelayAnswer, notify } from "./jobs";
 import { findKnowledge } from "./knowledge";
 import { emitOrbyteEvent } from "./orbyte";
 import { formatMYR, priceBrief, totals } from "./pricing";
@@ -110,12 +116,8 @@ async function loadCatalog(businessId: string) {
 		db
 			.select()
 			.from(schema.products)
-			.where(
-				and(
-					eq(schema.products.businessId, businessId),
-					eq(schema.products.active, true),
-				),
-			),
+			// Switched-off products too, so we can tell the customer they're unavailable.
+			.where(eq(schema.products.businessId, businessId)),
 		db
 			.select()
 			.from(schema.pricingRules)
@@ -260,7 +262,16 @@ const intakeProducts = (products: Catalog["products"]): IntakeProduct[] =>
 		category: p.category,
 		unit: p.unit,
 		pricingMode: p.pricingMode,
+		active: p.active,
 	}));
+
+/** A few things we do, for "what are you looking for?" (available ones only). */
+const offerings = (products: IntakeProduct[]) =>
+	[
+		...new Set(
+			products.filter((p) => p.active !== false).map((p) => p.category),
+		),
+	].slice(0, 5);
 
 function toCatalogQuestion(q: Question): CatalogQuestion {
 	return {
@@ -515,8 +526,13 @@ function describeMissing(m: Missing) {
 }
 
 /** "Flyer A5 × 500 pc — Paper: 157gsm art paper; Sides: double" lines for the recap. */
-function summaryLines(a: Assessment, brief: Brief) {
+function summaryLines(
+	a: Assessment,
+	brief: Brief,
+	issues: AvailabilityIssue[] = [],
+) {
 	const lines = a.items.map(({ item, product, questions }) => {
+		const issue = issues.find((i) => i.itemId === item.id);
 		const name = product?.name ?? `${item.rawText} (to be checked)`;
 		const qty = item.quantity
 			? ` × ${item.quantity} ${product?.unit ?? ""}`
@@ -525,7 +541,7 @@ function summaryLines(a: Assessment, brief: Brief) {
 			.filter((q) => item.answers[q.key]?.source !== "skipped")
 			.map((q) => `${q.label} → ${answerText(item.answers[q.key])}`)
 			.filter((s) => !s.endsWith("→ "));
-		return `${name}${qty}${details.length ? `: ${details.join("; ")}` : ""}`;
+		return `${name}${qty}${issue ? ` (${recapNote(issue)})` : ""}${details.length ? `: ${details.join("; ")}` : ""}`;
 	});
 	for (const q of a.general) {
 		const v = answerText(brief.general[q.key]);
@@ -710,6 +726,26 @@ async function advanceRequest(a: Advance): Promise<{
 	const wasDrafted =
 		request.status === "draft_ready" || request.status === "needs_review";
 
+	// Out of stock or switched off? Tell the customer as soon as we know, not after the draft.
+	const issues = availabilityIssues(brief, catalog.products, todayMY());
+	const told = new Set(brief.availabilityTold ?? []);
+	const fresh = a.forceDraft ? [] : issues.filter((i) => !told.has(i.key));
+	const allUnavailable =
+		assessment.items.length > 0 &&
+		assessment.items.every((v) => v.product?.active === false);
+	if (issues.length) {
+		await run.add({
+			kind: "check",
+			title: fresh.length
+				? `Availability: telling the customer about ${fresh.length === 1 ? fresh[0].name : `${fresh.length} items`}`
+				: "Availability: customer already knows",
+			detail: [
+				...issues.map(describeIssue),
+				"Stock and availability come from Products, not the AI.",
+			],
+		});
+	}
+
 	await run.add({
 		kind: "check",
 		title: assessment.blocking.length
@@ -734,19 +770,17 @@ async function advanceRequest(a: Advance): Promise<{
 		draft = true;
 		status = "draft_ready";
 		plan = { stage: "chat" };
+	} else if (allUnavailable) {
+		// Nothing we can quote right now: no point asking more; staff follow up.
+		status = "needs_review";
+		plan = { stage: "chat" };
 	} else if (assessment.missing.length > 0) {
 		status = "gathering";
 		asks = nextToAsk(assessment.missing);
 		const first = asks[0];
 		plan =
 			first.kind === "need"
-				? {
-						stage: "need",
-						offerings: [...new Set(products.map((p) => p.category))].slice(
-							0,
-							5,
-						),
-					}
+				? { stage: "need", offerings: offerings(products) }
 				: first.kind === "identify"
 					? {
 							stage: "identify",
@@ -786,10 +820,12 @@ async function advanceRequest(a: Advance): Promise<{
 		status = "confirming";
 		plan = {
 			stage: "confirming",
-			summary: summaryLines(assessment, brief),
+			summary: summaryLines(assessment, brief, issues),
 			isRevision,
 		};
 	}
+	// Everything still short or unavailable has now been told (the reply below says it).
+	if (!a.forceDraft) brief.availabilityTold = issues.map((i) => i.key);
 
 	await run.add({
 		kind: "ask",
@@ -804,7 +840,9 @@ async function advanceRequest(a: Advance): Promise<{
 						? a.forceDraft
 							? "Staff asked to draft now"
 							: "Customer confirmed: drafting the quotation"
-						: "Nothing to ask: replying to the message",
+						: allUnavailable
+							? "Nothing available to quote: handed to staff"
+							: "Nothing to ask: replying to the message",
 		detail:
 			plan.stage === "confirming"
 				? plan.summary
@@ -827,6 +865,7 @@ async function advanceRequest(a: Advance): Promise<{
 			catalog.products,
 			catalog.rules,
 			catalog.questions,
+			todayMY(),
 		);
 		status = result.outcome;
 		const saved = await saveRequest(
@@ -890,6 +929,15 @@ async function advanceRequest(a: Advance): Promise<{
 			{
 				status,
 				brief,
+				...(allUnavailable
+					? {
+							flags: issues.map((i) => ({
+								kind: "unavailable" as const,
+								itemIndex: brief.items.findIndex((x) => x.id === i.itemId),
+								message: `${describeIssue(i)}. Customer was told; follow up with them.`,
+							})),
+						}
+					: {}),
 				...(a.messageId ? { processedMessageId: a.messageId } : {}),
 			},
 			request.briefVersion,
@@ -897,7 +945,15 @@ async function advanceRequest(a: Advance): Promise<{
 			"Updated customer requirements",
 			request.status,
 		);
-		if (status === "confirming" && request.status !== "confirming") {
+		if (allUnavailable && request.status !== "needs_review") {
+			await emitOrbyteEvent(db, {
+				businessId: business.id,
+				requestId: request.id,
+				type: "quote.request.flagged_for_review",
+				actor: "quora-chat",
+				summary: `Nothing available to quote: ${issues.map(describeIssue).join("; ")}`,
+			});
+		} else if (status === "confirming" && request.status !== "confirming") {
 			await emitOrbyteEvent(db, {
 				businessId: business.id,
 				requestId: request.id,
@@ -916,6 +972,8 @@ async function advanceRequest(a: Advance): Promise<{
 		}
 	}
 
+	if (fresh.length) await tellStaffAboutAvailability(a, fresh);
+
 	// Staff drafting doesn't message the customer; they'll see the quote when it's sent.
 	if (a.forceDraft) return { status, reply: null };
 
@@ -931,10 +989,46 @@ async function advanceRequest(a: Advance): Promise<{
 			customerQuestion: a.customerQuestion,
 			knowledge: await publicFaq(business.id, a.customerQuestion, a.run),
 			notOffered,
+			// The recap already carries the note next to the item.
+			availability: plan.stage === "confirming" ? [] : fresh,
 			history: a.history,
 			firstReply: !a.history.some((m) => m.sender !== "customer"),
 		}).catch(() => "")) || fallbackReply(brief.language);
 	return { status, reply };
+}
+
+/** Staff hear about it at the same time as the customer, so they can step in. */
+async function tellStaffAboutAvailability(
+	a: Advance,
+	issues: AvailabilityIssue[],
+) {
+	const db = getDb();
+	const { business } = a.catalog;
+	const approvers = await db
+		.select({ id: schema.staff.id })
+		.from(schema.staff)
+		.where(
+			and(
+				eq(schema.staff.businessId, business.id),
+				eq(schema.staff.canApprove, true),
+			),
+		);
+	const short = issues.some((i) => i.kind === "short");
+	await notify(db, {
+		businessId: business.id,
+		staffIds: approvers.map((s) => s.id),
+		title: `${short ? "Not enough stock" : "Unavailable item"} for ${a.conversation.customerName}`,
+		body: `${issues.map(describeIssue).join("; ")}. The customer has been told; take over if you can help.`,
+		link: `/orbyte/${business.id}/inbox?c=${a.conversation.id}`,
+	});
+	await emitOrbyteEvent(db, {
+		businessId: business.id,
+		requestId: a.request.id,
+		type: "quote.request.availability_told",
+		actor: "quora-chat",
+		summary: `Told ${a.conversation.customerName}: ${issues.map(describeIssue).join("; ")}`,
+		payload: { issues },
+	});
 }
 
 function fallbackReply(language: Language) {
@@ -1225,6 +1319,7 @@ async function* customerTurn(
 				category: p.category,
 				unit: p.unit,
 				pricing: p.pricingMode,
+				available: p.active,
 				questions: questionsFor(p, catalog.questions).map(toCatalogQuestion),
 			})),
 			generalQuestions: businessQuestions(catalog.questions).map(
@@ -1477,13 +1572,7 @@ async function* customerTurn(
 				language: reading.language,
 				plan: hadRequest
 					? { stage: "chat" }
-					: {
-							stage: "need",
-							offerings: [...new Set(products.map((p) => p.category))].slice(
-								0,
-								5,
-							),
-						},
+					: { stage: "need", offerings: offerings(products) },
 				customerQuestion: reading.customerQuestion,
 				knowledge: await publicFaq(businessId, reading.customerQuestion, run),
 				notOffered: [],
@@ -2456,9 +2545,15 @@ async function reserveStock(
 	signerName: string,
 ) {
 	const qty = new Map<string, number>();
+	const backorder = new Map<string, number>();
 	for (const l of quote.lineItems) {
-		if (l.productId)
-			qty.set(l.productId, (qty.get(l.productId) ?? 0) + l.quantity);
+		if (!l.productId) continue;
+		qty.set(l.productId, (qty.get(l.productId) ?? 0) + l.quantity);
+		if (l.backorder)
+			backorder.set(
+				l.productId,
+				(backorder.get(l.productId) ?? 0) + l.backorder,
+			);
 	}
 	if (qty.size === 0) return;
 	const items = await db
@@ -2476,7 +2571,10 @@ async function reserveStock(
 		const n = qty.get(p.id) ?? 0;
 		if (p.businessId !== quote.businessId || !Number.isInteger(n) || n <= 0)
 			throw new Error("Stock items need a valid quantity from this business");
-		if (p.stockOnHand - p.stockReserved < n)
+		// The quote said some units come after restock, so those are reserved ahead.
+		const free = Math.max(p.stockOnHand - p.stockReserved, 0);
+		const short = Math.max(n - free, 0);
+		if (short > Math.min(backorder.get(p.id) ?? 0, n))
 			throw new Error(
 				`${p.name} no longer has enough stock. Ask our team to update the quotation.`,
 			);
@@ -2492,8 +2590,8 @@ async function reserveStock(
 			requestId,
 			type: "stock.reserved",
 			actor: signerName,
-			summary: `Reserved ${n} ${p.unit} of ${p.name} (${p.sku}) for ${quote.number}`,
-			payload: { productId: p.id, quantity: n },
+			summary: `Reserved ${n} ${p.unit} of ${p.name} (${p.sku}) for ${quote.number}${short ? ` (${short} on backorder, waiting for restock)` : ""}`,
+			payload: { productId: p.id, quantity: n, backorder: short },
 		});
 	}
 }

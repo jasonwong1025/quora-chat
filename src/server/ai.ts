@@ -1,6 +1,11 @@
 import OpenAI from "openai";
 import { z } from "zod";
 import type { Language } from "#/db/schema";
+import {
+	type AvailabilityIssue,
+	formatDay,
+	stockPhrase,
+} from "#/lib/availability";
 import type { Passage } from "#/lib/knowledge";
 import {
 	isReplay,
@@ -126,6 +131,8 @@ export type ReadInput = {
 		category: string;
 		unit: string;
 		pricing: "fixed" | "custom";
+		/** false = switched off right now; still matched, code tells the customer. */
+		available: boolean;
 		questions: CatalogQuestion[];
 	}[];
 	generalQuestions: CatalogQuestion[];
@@ -257,7 +264,7 @@ The latest customer message ${input.latestHasAttachment ? "HAS a file attached" 
 Rules:
 - Read the whole conversation, but focus on what the latest customer message adds or changes. Later messages override earlier ones.
 - items: return every item the customer still wants. Reuse the ref of existing items; use ref "" for new ones. Set removed=true on an existing item they no longer want. An item is something they want to buy; a question ("how much?", "berapa harga?", "什么价钱？") is never an item.
-- match="exact" only when exactly one catalog product clearly fits (set productId). "ambiguous" when several could fit (productId=null, list candidateProductIds). "none" when nothing fits.
+- match="exact" only when exactly one catalog product clearly fits (set productId). "ambiguous" when several could fit (productId=null, list candidateProductIds). "none" when nothing fits. Products with available=false still match normally (we'll tell the customer it's unavailable); don't treat them as "none".
 - quantity: only a number the customer stated or clearly implied ("two units" = 2). Otherwise null. Never assume.
 - answers: only keys from that product's questions. Only what the customer said or clearly implied, in any message. Map their words to the exact option text for single/multi/yes_no questions (e.g. "double side" → "double", "挂墙式" → "wall-mounted", "ya"/"boleh"/"可以" → "yes"). For number questions give the number or a short range in their words ("around 50"). For date questions, give the date as YYYY-MM-DD, working it out from today (${input.today}, Malaysia): "next Friday" / "Jumaat depan" / "下个星期五" = that weekday in the following Monday-to-Sunday week; "this Friday" = the coming one; "end of March" = the last day of March. Keep their words only when no specific date follows from them (e.g. "ASAP", "sometime in spring"). For file questions, answer ["<attachment>"] only if the latest message has a file that fits. Never invent, assume or default an answer.
 - general: answers to the business-wide questions, same rules.
@@ -330,6 +337,8 @@ export type ReplyInput = {
 	plan: ReplyPlan;
 	customerQuestion: string | null;
 	notOffered: string[]; // things they asked for that we don't sell
+	/** Stock or availability problems to tell them about now (facts from Products). */
+	availability?: AvailabilityIssue[];
 	history: ChatTurn[];
 	firstReply: boolean;
 	/** Public knowledge-base passages only; internal docs never reach the customer AI. */
@@ -368,6 +377,17 @@ function planText(plan: ReplyPlan) {
 	}
 }
 
+/** Facts only: the counts and date come from Products, and the AI must not add any. */
+function availabilityText(i: AvailabilityIssue) {
+	if (i.kind === "unavailable")
+		return `Let them know up front, kindly and plainly, that ${i.name} isn't available at the moment, and that our team will check and get back to them on it. Don't ask anything about ${i.name}. Don't suggest other products.`;
+	return `Right after your short hello or acknowledgement, and before any questions, tell them kindly and plainly: for ${i.name}, ${stockPhrase(i)}. Never say how many we have or how many are left; no stock numbers at all. ${
+		i.restockDate
+			? `More stock is expected on ${formatDay(i.restockDate)} (you may say this date, exactly as written).`
+			: "We don't have a restock date yet: don't guess or hint at one."
+	} Say they can wait for the restock, or our team will check and get back to them on it. Then carry on with the rest of the message.`;
+}
+
 /** Writes the WhatsApp message to send. Code decides what to ask; the AI decides how to say it. */
 export async function writeReply(input: ReplyInput): Promise<string> {
 	if (isReplay()) return replayReply(input);
@@ -394,7 +414,7 @@ How to write:
 - Usually 1-3 short sentences. Keep it under ~60 words, except a recap list.
 - Avoid stiff phrases: "kindly", "please be informed", "we would like to", "Dear", "valued customer", "I hope this message finds you well", "Thank you for reaching out", "as an AI".
 - At most one emoji, and only if the customer seems casual.
-- Never mention or hint at prices, discounts, totals or estimates. Don't promise dates or availability.
+- Never mention or hint at prices, discounts, totals or estimates. Don't promise dates or availability, except the stock facts you're given below, stated exactly.
 - Plain text. *bold* only if really useful. No sign-off or signature, and don't add our address or phone unless they ask.
 
 What you know about the business (use only this, never make things up):
@@ -405,6 +425,7 @@ ${info || "(nothing extra)"}${faq ? `\n\nThe business's published FAQ (you may u
 			`They also asked: "${input.customerQuestion}". Answer it first if the business info above covers it; otherwise say you'll check with the team.`,
 		input.notOffered.length > 0 &&
 			`They asked about something we don't list (${input.notOffered.join(", ")}). Say the team will check whether we can help with that.`,
+		...(input.availability ?? []).map(availabilityText),
 	]
 		.filter(Boolean)
 		.join("\n");

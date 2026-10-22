@@ -15,6 +15,7 @@
  */
 import { flagshipScenario, scriptKey } from "#/data/demo-scenario";
 import type { Language } from "#/db/schema";
+import { type AvailabilityIssue, formatDay } from "#/lib/availability";
 import type { Passage } from "#/lib/knowledge";
 import { searchKnowledge } from "#/lib/knowledge";
 import type {
@@ -333,7 +334,40 @@ export function replayReply(input: ReplyInput): string {
 		const faq = faqAnswer(input.knowledge);
 		body = `${faq ? `${p.faq} ${faq}` : p.checkWithTeam}\n\n${body}`;
 	}
+	const stock = (input.availability ?? []).map((i) =>
+		availabilityLine(i, input.language),
+	);
+	if (stock.length) body = `${stock.join("\n")}\n\n${body}`;
 	return body;
+}
+
+/** The same facts the live model gets, in a fixed sentence. */
+function availabilityLine(i: AvailabilityIssue, language: Language) {
+	const date =
+		i.kind === "short" && i.restockDate ? formatDay(i.restockDate) : null;
+	if (language === "ms") {
+		if (i.kind === "unavailable")
+			return `Maaf, ${i.name} tak ada buat masa ini. Team kami akan semak dan maklumkan semula ya.`;
+		return `Untuk ${i.name}, ${i.available > 0 ? "stok sekarang tak cukup untuk kuantiti penuh" : "stok sekarang dah habis"}. ${
+			date
+				? `Stok baru dijangka sampai ${date}.`
+				: "Tarikh stok baru belum pasti."
+		} Boleh tunggu stok baru, atau team kami akan semak dan maklumkan semula.`;
+	}
+	if (language === "zh") {
+		if (i.kind === "unavailable")
+			return `不好意思，${i.name}目前暂时没有。我们的团队会确认后再回复您。`;
+		return `${i.name}目前${i.available > 0 ? "库存不够您需要的数量" : "暂时缺货"}。${
+			date ? `新货预计${date}到。` : "新货日期还未确定。"
+		}您可以等新货，或者我们的团队确认后再回复您。`;
+	}
+	if (i.kind === "unavailable")
+		return `Sorry, ${i.name} isn't available at the moment. Our team will check and get back to you on it.`;
+	return `For ${i.name}, ${i.available > 0 ? "we don't have enough in stock for the full quantity right now" : "it's out of stock right now"}. ${
+		date
+			? `More stock is expected on ${date}.`
+			: "We don't have a restock date yet."
+	} You can wait for the restock, or our team will check and get back to you.`;
 }
 
 export function replayCustomerQuestion(input: {

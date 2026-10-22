@@ -59,9 +59,17 @@ async function main() {
 				.values(b.staff.map((s) => ({ ...s, businessId: b.id })))
 				.returning();
 			await tx.insert(schema.products).values(
-				b.products.map(({ questions: _q, ...p }) => ({
+				b.products.map(({ questions: _q, restockInDays, ...p }) => ({
 					...p,
 					businessId: b.id,
+					restockDate:
+						restockInDays === undefined
+							? null
+							: new Date(
+									Date.now() + restockInDays * 86_400_000,
+								).toLocaleDateString("en-CA", {
+									timeZone: "Asia/Kuala_Lumpur",
+								}),
 				})),
 			);
 			const questions = [

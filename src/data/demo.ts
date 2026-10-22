@@ -32,6 +32,10 @@ type DemoProduct = {
 	/** Defaults to "service" (services and made-to-order work). */
 	type?: "stock" | "service";
 	stockOnHand?: number;
+	/** Next restock expected this many days after seeding (stock items). */
+	restockInDays?: number;
+	/** false = switched off in Products; the AI tells customers it's unavailable. */
+	active?: boolean;
 	/** "custom": staff price it from the requirement brief. Defaults to "fixed". */
 	pricingMode?: "fixed" | "custom";
 	category: string;
@@ -323,6 +327,7 @@ export const demoBusinesses: DemoBusiness[] = [
 				sku: "KP-BRD-PP3",
 				type: "stock",
 				stockOnHand: 0,
+				restockInDays: 6,
 				category: "Boards",
 				name: "PP hollow sheet 4 x 8 ft (3mm)",
 				description: "Corrugated plastic sheet for signage.",
@@ -604,6 +609,7 @@ export const demoBusinesses: DemoBusiness[] = [
 				sku: "SM-AC-INV1.5",
 				type: "stock",
 				stockOnHand: 2,
+				restockInDays: 4,
 				category: "Aircon units",
 				name: "Inverter aircon 1.5HP wall-mounted (unit only)",
 				description:
@@ -841,6 +847,7 @@ export const demoBusinesses: DemoBusiness[] = [
 				id: "rr-waterproofing",
 				sku: "RR-WP-JOB",
 				pricingMode: "custom",
+				active: false, // team fully booked: shows the "not available" reply
 				category: "Waterproofing",
 				name: "Waterproofing",
 				description: "Bathroom or roof waterproofing.",
