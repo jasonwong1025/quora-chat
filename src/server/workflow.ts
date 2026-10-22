@@ -897,7 +897,7 @@ async function advanceRequest(a: Advance): Promise<{
 			language: brief.language,
 			plan,
 			customerQuestion: a.customerQuestion,
-			knowledge: await publicFaq(business.id, a.customerQuestion),
+			knowledge: await publicFaq(business.id, a.customerQuestion, a.run),
 			notOffered,
 			history: a.history,
 			firstReply: !a.history.some((m) => m.sender !== "customer"),
@@ -917,10 +917,42 @@ function fallbackReply(language: Language) {
  * Published FAQ passages for a customer's question. Only "public" docs: internal
  * knowledge is never loaded for the customer-facing AI, whatever the message says.
  */
-function publicFaq(businessId: string, question: string | null) {
-	return question
-		? findKnowledge(businessId, "customer", question, 3).catch(() => [])
-		: Promise.resolve([]);
+async function publicFaq(
+	businessId: string,
+	question: string | null,
+	run: Run,
+) {
+	if (!question) return [];
+	const passages = await findKnowledge(
+		businessId,
+		"customer",
+		question,
+		3,
+	).catch(() => []);
+	// Staff can see what the customer was told it from, or that nothing covered it.
+	await run.add(
+		passages.length
+			? {
+					kind: "check",
+					title: `Answered their question from the public FAQ`,
+					detail: [
+						`Question: ${question}`,
+						...[...new Set(passages.map((p) => p.title))].map(
+							(t) => `Source: ${t}`,
+						),
+						"Only Public documents are given to the customer-facing AI.",
+					],
+				}
+			: {
+					kind: "check",
+					title: "No public FAQ covers their question",
+					detail: [
+						`Question: ${question}`,
+						"Told them the team will check, rather than guessing.",
+					],
+				},
+	);
+	return passages;
 }
 
 // --- Customer message ---------------------------------------------------------------------
@@ -1236,7 +1268,7 @@ export async function* handleCustomerMessage(input: {
 							"Answer their question about this quotation using the agreed requirements. Do not change the scope, price or promise new work.",
 					},
 					customerQuestion: reading.customerQuestion,
-					knowledge: await publicFaq(businessId, reading.customerQuestion),
+					knowledge: await publicFaq(businessId, reading.customerQuestion, run),
 					notOffered: [],
 					history,
 					firstReply: false,
@@ -1336,7 +1368,7 @@ export async function* handleCustomerMessage(input: {
 							),
 						},
 				customerQuestion: reading.customerQuestion,
-				knowledge: await publicFaq(businessId, reading.customerQuestion),
+				knowledge: await publicFaq(businessId, reading.customerQuestion, run),
 				notOffered: [],
 				history,
 				firstReply: !history.some((m) => m.sender !== "customer"),

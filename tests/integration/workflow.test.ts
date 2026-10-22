@@ -1561,6 +1561,19 @@ test("flagship demo (replay mode): Kilat flyers from first message to an actiona
 		const faq = await say(steps[1]);
 		assert.match(faq, /PDF works best/); // answered from the public FAQ
 		assert.match(faq, /paper/i); // and the next preset questions
+		const faqRun = (
+			await db
+				.select()
+				.from(schema.aiRuns)
+				.where(eq(schema.aiRuns.conversationId, chat.id))
+				.orderBy(schema.aiRuns.createdAt)
+		).at(-1);
+		// Staff can see which public document the answer came from.
+		assert.ok(
+			faqRun?.steps.some((x) =>
+				x.detail?.includes("Source: Customer FAQ: artwork and collection"),
+			),
+		);
 		await say(steps[2]);
 		const recap = await say(steps[3]);
 		assert.match(recap, /Ringkasan/);

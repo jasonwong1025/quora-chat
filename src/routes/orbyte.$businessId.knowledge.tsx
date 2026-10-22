@@ -66,13 +66,17 @@ function Knowledge() {
 		orpc.knowledge.list.queryOptions({ input: { businessId: business.id } }),
 	);
 	const [filter, setFilter] = useState("");
+	const [only, setOnly] = useState<"all" | Visibility>("all");
 	const canEdit = Boolean(me?.canApprove);
 	const all = docs.data ?? [];
-	const shown = all.filter((doc) =>
-		`${doc.title} ${doc.category} ${doc.body}`
-			.toLowerCase()
-			.includes(filter.trim().toLowerCase()),
+	const shown = all.filter(
+		(doc) =>
+			(only === "all" || doc.visibility === only) &&
+			`${doc.title} ${doc.category} ${doc.body}`
+				.toLowerCase()
+				.includes(filter.trim().toLowerCase()),
 	);
+	const count = (v: Visibility) => all.filter((x) => x.visibility === v).length;
 	const categories = [...new Set(shown.map((doc) => doc.category))];
 	const selected = d === "new" ? null : (all.find((x) => x.id === d) ?? null);
 	const open = (id: string | undefined) =>
@@ -112,6 +116,35 @@ function Knowledge() {
 							aria-label="Filter documents"
 							className="bg-card pl-9"
 						/>
+					</div>
+					<div
+						role="radiogroup"
+						aria-label="Show documents"
+						className="flex flex-wrap gap-1.5"
+					>
+						{(
+							[
+								["all", `All ${all.length}`],
+								["internal", `Internal ${count("internal")}`],
+								["public", `Public ${count("public")}`],
+							] as const
+						).map(([v, label]) => (
+							<button
+								key={v}
+								type="button"
+								role="radio"
+								aria-checked={only === v}
+								onClick={() => setOnly(v)}
+								className={cn(
+									"rounded-full border px-3 py-1 text-xs",
+									only === v
+										? "border-primary bg-primary text-primary-foreground"
+										: "bg-card hover:bg-muted",
+								)}
+							>
+								{label}
+							</button>
+						))}
 					</div>
 					{docs.isPending ? (
 						<p className="flex items-center gap-2 text-sm text-muted-foreground">
@@ -438,6 +471,13 @@ function DocEditor(props: {
 							</SelectItem>
 						</SelectContent>
 					</Select>
+					{draft.visibility === "public" && (
+						<p className="flex items-start gap-1.5 rounded-md bg-status-review/10 px-2 py-1.5 text-xs">
+							<Globe className="mt-0.5 size-3.5 shrink-0" />
+							Customers' WhatsApp assistant may quote this to anyone. Keep
+							prices, margins, discounts and internal steps out of it.
+						</p>
+					)}
 				</div>
 			</div>
 			<div className="space-y-1.5">
