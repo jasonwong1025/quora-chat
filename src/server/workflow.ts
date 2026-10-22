@@ -330,6 +330,15 @@ function applyReading(
 				evidence?.id !== latest.id
 			)
 				continue;
+			// Restating an answer we already have from the customer, without (valid)
+			// evidence, keeps the original; it never downgrades it to "ambiguous".
+			if (
+				!evidence &&
+				!fileMessageId &&
+				prev?.source === "customer" &&
+				sameValues(prev.values, clean)
+			)
+				continue;
 			const answerState = evidence || fileMessageId ? state : "ambiguous";
 			if (
 				prev &&
@@ -364,6 +373,14 @@ function applyReading(
 		const candidates = r.candidateProductIds.filter((id) => known.has(id));
 		const match: BriefItem["match"] =
 			r.match === "exact" && !productId ? "none" : r.match;
+		// A question ("berapa harga?", "what file should I send?") is not something
+		// they want to buy. Models sometimes list one as an item; don't add it.
+		if (
+			!existing &&
+			match === "none" &&
+			/^\s*\(|[?？]\s*\)?\s*$/u.test(r.rawText)
+		)
+			continue;
 		const item: BriefItem = existing ?? {
 			id: crypto.randomUUID(),
 			match,

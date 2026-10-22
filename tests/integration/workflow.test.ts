@@ -1883,3 +1883,114 @@ test("demo reset clears one demo business's activity, returns stock, and keeps i
 		1,
 	);
 });
+
+test("a restated answer without evidence keeps the customer's original, instead of reopening it", async () => {
+	const s = await scenario();
+	const before = s.request.brief.items[0].answers.users;
+	reading = {
+		language: "en",
+		summary: "Same system, quantity mentioned again",
+		items: [
+			{
+				ref: "item",
+				productId: s.product.id,
+				match: "exact",
+				candidateProductIds: [],
+				rawText: "custom system",
+				quantity: 1,
+				removed: false,
+				reason: "Unchanged",
+				// The model repeats the earlier answer but cites a message id that doesn't exist.
+				answers: [
+					{
+						key: "users",
+						values: ["50"],
+						state: "known",
+						evidenceMessageId: "not-a-real-message",
+					},
+				],
+			},
+		],
+		general: [],
+		followUpAnswers: [],
+		followUp: null,
+		confirmation: "none",
+		wantsChange: false,
+		quoteResponse: {
+			intent: "none",
+			resumeOn: null,
+			lostReason: null,
+			note: null,
+		},
+		customerQuestion: null,
+		reasoning: ["Restated"],
+	};
+	for await (const _ of handleCustomerMessage({
+		conversationId: s.conversation.id,
+		body: "Still 50 people, thanks",
+	})) {
+		/* drain */
+	}
+	const after = await getDb().query.quoteRequests.findFirst({
+		where: eq(schema.quoteRequests.id, s.request.id),
+	});
+	const users = after?.brief.items[0].answers.users;
+	assert.equal(users?.state, "known");
+	assert.equal(users?.messageId, before.messageId);
+	assert.equal(after?.briefVersion, s.request.briefVersion);
+});
+
+test("a question the model lists as an item is not added to the brief", async () => {
+	const s = await scenario();
+	reading = {
+		language: "zh",
+		summary: "Asking the price",
+		items: [
+			{
+				ref: "item",
+				productId: s.product.id,
+				match: "exact",
+				candidateProductIds: [],
+				rawText: "custom system",
+				quantity: 1,
+				removed: false,
+				reason: "Same",
+				answers: [],
+			},
+			{
+				ref: "",
+				productId: null,
+				match: "none",
+				candidateProductIds: [],
+				rawText: "什么价钱？",
+				quantity: null,
+				removed: false,
+				reason: "Not in catalog",
+				answers: [],
+			},
+		],
+		general: [],
+		followUpAnswers: [],
+		followUp: null,
+		confirmation: "none",
+		wantsChange: false,
+		quoteResponse: {
+			intent: "none",
+			resumeOn: null,
+			lostReason: null,
+			note: null,
+		},
+		customerQuestion: "How much is it?",
+		reasoning: ["Asked the price"],
+	};
+	for await (const _ of handleCustomerMessage({
+		conversationId: s.conversation.id,
+		body: "什么价钱？",
+	})) {
+		/* drain */
+	}
+	const after = await getDb().query.quoteRequests.findFirst({
+		where: eq(schema.quoteRequests.id, s.request.id),
+	});
+	assert.equal(after?.brief.items.length, 1);
+});
