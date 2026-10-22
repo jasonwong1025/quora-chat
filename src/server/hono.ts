@@ -1,4 +1,4 @@
-import { onError } from "@orpc/server";
+import { ORPCError, onError } from "@orpc/server";
 import { RPCHandler } from "@orpc/server/fetch";
 import { eq } from "drizzle-orm";
 import { Hono } from "hono";
@@ -11,7 +11,15 @@ import { renderQuotePdf } from "./quote-pdf";
 startFollowUpScheduler();
 
 const rpc = new RPCHandler(router, {
-	interceptors: [onError((error) => console.error("[orpc]", error))],
+	interceptors: [
+		onError((error) => {
+			// A missing record (e.g. an old link after `pnpm db:seed`) is an expected
+			// answer for the client, not a server fault; log it briefly.
+			if (error instanceof ORPCError && error.code === "NOT_FOUND")
+				console.warn("[orpc] not found:", error.message);
+			else console.error("[orpc]", error);
+		}),
+	],
 });
 
 /** All /api/* traffic. Mounted by src/routes/api.$.ts. */

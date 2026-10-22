@@ -75,6 +75,10 @@ export const Route = createFileRoute("/orbyte/$businessId/work/$jobId")({
 
 type Tab = "handover" | "tasks" | "chat" | "quote" | "team";
 
+/** oRPC errors carry a code; checked by value so server- and client-side errors both match. */
+const isNotFound = (err: unknown) =>
+	(err as { code?: unknown } | null)?.code === "NOT_FOUND";
+
 function useRefresh() {
 	const queryClient = useQueryClient();
 	return () => queryClient.invalidateQueries({ queryKey: orpc.jobs.key() });
@@ -87,8 +91,14 @@ function JobPage() {
 	const { business } = useWorkspace();
 	const job = useQuery({
 		...orpc.jobs.get.queryOptions({ input: { jobId } }),
+		// A job that doesn't exist (e.g. after `pnpm db:seed`) won't appear by retrying.
+		retry: (count, err) => !isNotFound(err) && count < 3,
 		refetchInterval: (q) =>
-			q.state.data?.status === "preparing" ? 2000 : 5000,
+			isNotFound(q.state.error)
+				? false
+				: q.state.data?.status === "preparing"
+					? 2000
+					: 5000,
 	});
 	const [highlight, setHighlight] = useState<string | null>(null);
 	const [asking, setAsking] = useState<string | null>(null);
@@ -101,7 +111,22 @@ function JobPage() {
 			</p>
 		);
 	if (job.isError || !job.data)
-		return <p className="p-6 text-sm text-muted-foreground">Job not found.</p>;
+		return (
+			<div className="p-6 text-sm text-muted-foreground">
+				<p>
+					{isNotFound(job.error)
+						? "This job doesn't exist any more. If the demo data was reset (pnpm db:seed), old links stop working."
+						: "Couldn't load this job. Check the server is running, then refresh."}
+				</p>
+				<Link
+					to="/orbyte/$businessId/work"
+					params={{ businessId: business.id }}
+					className="mt-2 inline-block text-primary hover:underline"
+				>
+					← Back to Work
+				</Link>
+			</div>
+		);
 	const j = job.data;
 
 	const showMessage = (id: string) => {
