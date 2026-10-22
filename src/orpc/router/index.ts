@@ -15,6 +15,7 @@ import { getDemoBusiness } from "#/data/demo";
 import { getDb, schema } from "#/db";
 import { suggestSku, uniqueSku } from "#/lib/sku";
 import { aiMode, aiModelName, suggestQuestions } from "#/server/ai";
+import { resetDemoActivity } from "#/server/demo-reset";
 import { fastForward, followUpAction } from "#/server/followups";
 import {
 	addJobMember,
@@ -1596,6 +1597,21 @@ const systemInfo = os.handler(() => ({
 	model: aiModelName(),
 }));
 
+/** Demo only: clear one demo business's chats, quotes and jobs (approvers only). */
+const demoReset = os
+	.input(businessInput.extend({ staffId: z.string() }))
+	.handler(async ({ input }) => {
+		const member = await getDb().query.staff.findFirst({
+			where: and(
+				eq(schema.staff.id, input.staffId),
+				eq(schema.staff.businessId, input.businessId),
+			),
+		});
+		if (!member?.canApprove)
+			fail(new Error("Only an approver can reset the demo"));
+		return resetDemoActivity(input.businessId).catch(fail);
+	});
+
 /** Demo only: pretend days have passed for one business. */
 const demoFastForward = os
 	.input(businessInput.extend({ days: z.number().int().min(1).max(30) }))
@@ -1644,7 +1660,7 @@ export default {
 		followUp: quoteFollowUpAction,
 	},
 	followUpRules: { update: updateFollowUpRules },
-	demo: { fastForward: demoFastForward },
+	demo: { fastForward: demoFastForward, reset: demoReset },
 	system: { info: systemInfo },
 	jobs: {
 		list: listJobs,

@@ -23,6 +23,7 @@
 		"db:migrate": "node --env-file-if-exists=.env --import tsx scripts/migrate.ts",
 		"db:studio": "drizzle-kit studio",
 		"db:seed": "tsx --env-file-if-exists=.env src/db/seed.ts",
+		"demo:reset": "node --env-file-if-exists=.env --import tsx scripts/demo-reset.ts",
 		"format": "biome format",
 		"lint": "biome lint",
 		"check": "biome check"

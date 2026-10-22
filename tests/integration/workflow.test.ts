@@ -153,9 +153,11 @@ after(async () => {
 	await getDb().$client.end();
 });
 
-async function scenario(stock = false) {
+async function scenario(
+	stock = false,
+	businessId: string = crypto.randomUUID(),
+) {
 	const db = getDb();
-	const businessId = crypto.randomUUID();
 	await db.insert(schema.businesses).values({
 		id: businessId,
 		name: "Kodkraf test",
@@ -1810,4 +1812,74 @@ test("reliability: the server recomputes edited amounts and starts validity when
 	});
 	const days = (sent.validUntil.getTime() - Date.now()) / 86_400_000;
 	assert.ok(days > 13.9 && days <= 14, `valid for ${days} days`);
+});
+
+test("demo reset clears one demo business's activity, returns stock, and keeps its setup", async () => {
+	const db = getDb();
+	const { resetDemoActivity } = await import("../../src/server/demo-reset");
+	// Not a demo business: refused.
+	const s = await scenario(true);
+	await assert.rejects(
+		resetDemoActivity(s.businessId),
+		/Only the synthetic demo/,
+	);
+
+	await db.delete(schema.businesses);
+
+	// The real demo id, with a signed stock order (reserves stock) and a job.
+	const k = await scenario(true, "kilat-print");
+	const quote = await approve(k);
+	await signQuote(signature(quote.id));
+	await runNextTask();
+	await runNextTask();
+	const reserved = await db.query.products.findFirst({
+		where: eq(schema.products.id, k.product.id),
+	});
+	assert.equal(reserved?.stockReserved, 1);
+	await db.insert(schema.knowledgeDocs).values({
+		businessId: "kilat-print",
+		title: "Keep me",
+		category: "SOP",
+		body: "Stays after reset.",
+	});
+
+	const done = await resetDemoActivity("kilat-print");
+	assert.equal(done.jobs, 1);
+	for (const table of [
+		schema.conversations,
+		schema.quotes,
+		schema.jobs,
+		schema.notifications,
+		schema.activityEvents,
+		schema.clients,
+	] as const)
+		assert.equal(
+			(await db.select().from(table).where(eq(table.businessId, "kilat-print")))
+				.length,
+			0,
+		);
+	assert.equal((await db.select().from(schema.workflowTasks)).length, 0);
+	const product = await db.query.products.findFirst({
+		where: eq(schema.products.id, k.product.id),
+	});
+	assert.equal(product?.stockReserved, 0); // stock returned
+	assert.equal(product?.stockOnHand, 3);
+	assert.equal(
+		(
+			await db
+				.select()
+				.from(schema.staff)
+				.where(eq(schema.staff.businessId, "kilat-print"))
+		).length,
+		2,
+	);
+	assert.equal(
+		(
+			await db
+				.select()
+				.from(schema.knowledgeDocs)
+				.where(eq(schema.knowledgeDocs.businessId, "kilat-print"))
+		).length,
+		1,
+	);
 });
