@@ -1,3 +1,4 @@
+import { Link } from "@tanstack/react-router";
 import { AlertTriangle, ArrowLeft, PenLine, RotateCcw } from "lucide-react";
 import { ActivityFeed } from "#/components/activity-feed";
 import { FollowUpPanel } from "#/components/orbyte/follow-up-panel";
@@ -167,10 +168,21 @@ export function RequestDetail(props: {
 						</div>
 					)}
 					{request.quote.status === "accepted" && (
-						<p className="mb-2 flex items-center gap-2 rounded-md bg-status-approved/10 px-3 py-2 text-sm">
+						<p className="mb-2 flex flex-wrap items-center gap-2 rounded-md bg-status-approved/10 px-3 py-2 text-sm">
 							<PenLine className="size-4 text-status-approved" />
 							Signed by {request.quote.signerName} on{" "}
 							{request.quote.signedAt?.toLocaleString("en-MY")}.
+							{request.job ? (
+								<Link
+									to="/orbyte/$businessId/work/$jobId"
+									params={{ businessId: business.id, jobId: request.job.id }}
+									className="font-medium text-primary hover:underline"
+								>
+									Open job {request.job.number} →
+								</Link>
+							) : (
+								<span className="text-muted-foreground">Creating the job…</span>
+							)}
 						</p>
 					)}
 					<QuoteEditor

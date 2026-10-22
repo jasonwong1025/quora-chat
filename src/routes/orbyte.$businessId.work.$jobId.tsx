@@ -276,6 +276,24 @@ function JobHeader({ job, onAsk }: { job: JobDetail; onAsk: () => void }) {
 							: ""}{" "}
 						· signed {job.quote.signedAt ? dayLabel(job.quote.signedAt) : ""}
 					</p>
+					<p className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-xs">
+						<Link
+							to="/orbyte/$businessId/quotes"
+							params={{ businessId: business.id }}
+							search={{ r: job.requestId }}
+							className="text-primary hover:underline"
+						>
+							Quotation {job.quote.number} →
+						</Link>
+						<Link
+							to="/orbyte/$businessId/inbox"
+							params={{ businessId: business.id }}
+							search={{ c: job.conversationId }}
+							className="text-primary hover:underline"
+						>
+							Sales chat with {job.client.contactName ?? job.client.name} →
+						</Link>
+					</p>
 				</div>
 				<div className="flex flex-wrap items-end gap-2">
 					<Labeled label="Status">

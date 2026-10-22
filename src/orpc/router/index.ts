@@ -249,16 +249,34 @@ const listRequests = os.input(businessInput).handler(async ({ input }) => {
 				.from(schema.quotes)
 				.where(inArray(schema.quotes.requestId, ids))
 		: [];
+	const jobs = ids.length
+		? await db
+				.select({
+					id: schema.jobs.id,
+					number: schema.jobs.number,
+					requestId: schema.jobs.requestId,
+					quoteId: schema.jobs.quoteId,
+				})
+				.from(schema.jobs)
+				.where(eq(schema.jobs.businessId, input.businessId))
+		: [];
 	return requests.map(({ request, customerName }) => {
 		const quote =
 			quotes
 				.filter((q) => q.requestId === request.id)
 				.sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())[0] ??
 			null;
+		const own = new Set(
+			quotes.filter((q) => q.requestId === request.id).map((q) => q.id),
+		);
+		const job =
+			jobs.find((j) => j.requestId === request.id || own.has(j.quoteId)) ??
+			null;
 		return {
 			...request,
 			customerName,
 			quote,
+			job: job ? { id: job.id, number: job.number } : null,
 			baselineQuote:
 				quotes.find(
 					(q) => q.id === (request.brief.revisionOf ?? quote?.supersedesId),
