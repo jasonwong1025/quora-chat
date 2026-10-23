@@ -2,7 +2,6 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import {
 	Check,
 	ExternalLink,
-	ListChecks,
 	Loader2,
 	Plus,
 	Sparkles,
@@ -179,7 +178,7 @@ export function QuoteEditor(props: {
 	}
 
 	return (
-		<div className="rounded-lg border">
+		<div className="border">
 			{props.onHold && (
 				<output className="block border-b bg-status-review/10 p-3 text-sm">
 					{props.onHold}
@@ -209,35 +208,28 @@ export function QuoteEditor(props: {
 					{lines.map((l, i) => (
 						<li key={`${quote.id}-${i}`} className="space-y-2 px-3 py-2.5">
 							<div>
-								<div className="flex gap-2">
+								<div className="flex gap-1">
 									<Input
 										aria-label={`Line ${i + 1} description`}
 										value={l.description}
 										onChange={(e) => patch(i, { description: e.target.value })}
 										className="h-8 min-w-0 flex-1"
 									/>
-									<Select
-										value={chargeOf(l)}
-										onValueChange={(v) => patch(i, { charge: v as Charge })}
+									<Button
+										variant="ghost"
+										size="icon"
+										className="size-8 shrink-0"
+										aria-label={`Remove line ${i + 1}`}
+										onClick={() => {
+											setDirty(true);
+											setLines((ls) => ls.filter((_, idx) => idx !== i));
+										}}
 									>
-										<SelectTrigger
-											size="sm"
-											className="w-32 shrink-0"
-											aria-label={`Line ${i + 1} charged`}
-										>
-											<SelectValue />
-										</SelectTrigger>
-										<SelectContent position="popper">
-											{(Object.keys(chargeLabel) as Charge[]).map((c) => (
-												<SelectItem key={c} value={c}>
-													{chargeLabel[c]}
-												</SelectItem>
-											))}
-										</SelectContent>
-									</Select>
+										<Trash2 className="size-4" />
+									</Button>
 								</div>
 								{l.source === "ai_estimate" && (
-									<p className="mt-1 flex items-start gap-1.5 rounded bg-status-review/10 px-2 py-1 text-xs">
+									<p className="mt-1 flex items-start gap-1.5 bg-muted/60 px-2 py-1 text-xs">
 										<Sparkles className="mt-0.5 size-3 shrink-0 text-status-review" />
 										<span>
 											<span className="font-medium">
@@ -247,21 +239,17 @@ export function QuoteEditor(props: {
 										</span>
 									</p>
 								)}
-								{l.source === "builder" && (
-									<p className="mt-1 flex items-center gap-1 text-[11px] text-muted-foreground">
-										<ListChecks className="size-3" /> From the price list
-									</p>
-								)}
+
 								{l.notes && (
 									<p className="mt-1 text-xs text-muted-foreground">
 										{l.notes}
 									</p>
 								)}
 							</div>
-							<div className="grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto_auto] items-end gap-2">
+							<div className="grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto] items-start gap-2">
 								<div className="min-w-0 space-y-0.5 text-xs text-muted-foreground">
 									<label htmlFor={`${quote.id}-qty-${i}`}>
-										Qty{l.unit ? ` (${l.unit})` : ""}
+										Qty{l.unit ? ` · ${l.unit}` : ""}
 									</label>
 									<Input
 										id={`${quote.id}-qty-${i}`}
@@ -301,25 +289,32 @@ export function QuoteEditor(props: {
 										{formatMYR(l.amountSen)}
 										{chargeSuffix[chargeOf(l)]}
 									</p>
+									<Select
+										value={chargeOf(l)}
+										onValueChange={(v) => patch(i, { charge: v as Charge })}
+									>
+										<SelectTrigger
+											size="sm"
+											className="ml-auto h-6 w-auto gap-1 border-0 px-1 text-xs text-muted-foreground shadow-none"
+											aria-label={`Line ${i + 1} charged`}
+										>
+											<SelectValue />
+										</SelectTrigger>
+										<SelectContent position="popper" align="end">
+											{(Object.keys(chargeLabel) as Charge[]).map((c) => (
+												<SelectItem key={c} value={c}>
+													{chargeLabel[c]}
+												</SelectItem>
+											))}
+										</SelectContent>
+									</Select>
 								</div>
-								<Button
-									variant="ghost"
-									size="icon"
-									className="size-8"
-									aria-label={`Remove line ${i + 1}`}
-									onClick={() => {
-										setDirty(true);
-										setLines((ls) => ls.filter((_, idx) => idx !== i));
-									}}
-								>
-									<Trash2 className="size-4" />
-								</Button>
 							</div>
 						</li>
 					))}
 					{lines.length === 0 && (
 						<li className="px-3 py-4 text-center text-xs text-muted-foreground">
-							No priced lines yet — add them manually after assessment.
+							No lines yet
 						</li>
 					)}
 				</ul>
@@ -424,8 +419,7 @@ export function QuoteEditor(props: {
 				)}
 				{editable && estimates > 0 && (
 					<p className="pt-1 text-xs text-status-review">
-						{estimates} AI estimate{estimates === 1 ? "" : "s"} to check. Change
-						the hours or rate to confirm it.
+						{estimates} AI estimate{estimates === 1 ? "" : "s"} to check
 					</p>
 				)}
 			</div>
@@ -521,7 +515,7 @@ export function QuoteEditor(props: {
 						)}
 						{actingAs && !actingAs.canApprove && (
 							<p className="text-xs text-muted-foreground">
-								{actingAs.name} ({actingAs.role}) can edit but not approve.
+								Only approvers can approve
 							</p>
 						)}
 					</div>

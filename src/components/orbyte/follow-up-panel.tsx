@@ -67,7 +67,7 @@ export function FollowUpPanel({ quote }: { quote: Quote }) {
 
 	if (quote.status === "lost")
 		return (
-			<div className="flex items-start gap-2 rounded-md bg-status-rejected/10 px-3 py-2 text-sm">
+			<div className="flex items-start gap-2 bg-muted/60 px-3 py-2 text-sm">
 				<CircleSlash className="mt-0.5 size-4 shrink-0 text-status-rejected" />
 				<span>
 					<b>Lost: {lostLabel[quote.lostReason ?? "other"]}</b>
@@ -115,7 +115,7 @@ export function FollowUpPanel({ quote }: { quote: Quote }) {
 	}
 
 	return (
-		<div className="space-y-2 rounded-lg border p-3 text-sm">
+		<div className="space-y-2 border p-3 text-sm">
 			<div className="flex items-center justify-between gap-2">
 				<p className="flex items-center gap-1.5 font-medium">
 					<BellRing className="size-4 text-[var(--orb-royal)]" /> Follow-ups
@@ -128,12 +128,11 @@ export function FollowUpPanel({ quote }: { quote: Quote }) {
 			</div>
 
 			{quote.followUpsPaused ? (
-				<p className="flex items-start gap-2 rounded-md bg-status-clarify/15 px-2.5 py-2 text-xs">
-					<Pause className="mt-px size-3.5 shrink-0" /> Paused. No reminders
-					until someone resumes them.
+				<p className="flex items-start gap-2 bg-muted/60 px-2.5 py-2 text-xs">
+					<Pause className="mt-px size-3.5 shrink-0" /> Paused
 				</p>
 			) : next ? (
-				<div className="rounded-md bg-secondary/60 px-2.5 py-2 text-xs">
+				<div className="bg-muted/60 px-2.5 py-2 text-xs">
 					<p className="flex items-center gap-1.5 font-medium">
 						<CalendarClock className="size-3.5" /> Next: {when(next.dueAt)}
 					</p>
@@ -145,8 +144,8 @@ export function FollowUpPanel({ quote }: { quote: Quote }) {
 			) : (
 				<p className="text-xs text-muted-foreground">
 					{reminders >= business.followUpMax
-						? "All reminders sent. If it isn't signed, it's extended once at expiry, then marked lost."
-						: "No reminder planned before it expires."}
+						? "All reminders sent"
+						: "No reminder planned"}
 				</p>
 			)}
 
@@ -165,7 +164,7 @@ export function FollowUpPanel({ quote }: { quote: Quote }) {
 			)}
 
 			{losing ? (
-				<div className="space-y-2 rounded-md bg-muted/60 p-2">
+				<div className="space-y-2 bg-muted/50 p-2">
 					<div className="flex gap-2">
 						<Select
 							value={reason}

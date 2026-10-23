@@ -49,10 +49,16 @@ export function ActivityFeed({
 						/>
 						<p className="text-sm">{e.summary}</p>
 						<p className="text-xs text-muted-foreground">
-							<code className="rounded bg-muted px-1 py-0.5 text-[10px]">
-								{e.type}
-							</code>{" "}
-							· {e.actor} ·{" "}
+							{/* Event codes matter on the Orbyte log, not inside one request. */}
+							{!requestId && (
+								<>
+									<code className="rounded bg-muted px-1 py-0.5 text-[10px]">
+										{e.type}
+									</code>{" "}
+									·{" "}
+								</>
+							)}
+							{e.actor} ·{" "}
 							{e.createdAt.toLocaleTimeString("en-MY", {
 								hour: "2-digit",
 								minute: "2-digit",

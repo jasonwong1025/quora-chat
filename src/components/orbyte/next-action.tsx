@@ -74,9 +74,7 @@ export function nextAction(
 			turn: "customer",
 			tone: "waiting",
 			title: `Sent. Waiting for ${customer} to sign ${quote?.number ?? "the quotation"}.`,
-			detail: quote?.viewedAt
-				? "They opened it. Follow-ups are scheduled automatically."
-				: "Not opened yet. Follow-ups are scheduled automatically.",
+			detail: quote?.viewedAt ? "Opened" : "Not opened yet",
 		};
 	}
 	const a = assess(request.brief, business.products, business.questions);
@@ -88,7 +86,6 @@ export function nextAction(
 			title: next
 				? `AI is asking ${customer}: ${describe(next)}`
 				: `AI is gathering details from ${customer}`,
-			detail: `${a.requiredAnswered}/${a.requiredTotal} required details in. Nothing to do unless they get stuck: use Ask now, or Take over.`,
 		};
 	}
 	if (request.status === "confirming")
@@ -96,8 +93,6 @@ export function nextAction(
 			turn: "customer",
 			tone: "waiting",
 			title: `Waiting for ${customer} to confirm the summary`,
-			detail:
-				"Nothing is priced or sent until they confirm and an approver approves.",
 		};
 	// Drafted (draft_ready / needs_review).
 	const issue =
@@ -114,7 +109,6 @@ export function nextAction(
 			turn: "you",
 			tone: "action",
 			title: "Prepare a draft",
-			detail: "All required details are in. Use Draft now.",
 		};
 	const flags = request.flags.length;
 	const what = flags
@@ -127,14 +121,7 @@ export function nextAction(
 			title: `Waiting for an approver: ${what.toLowerCase()}`,
 			detail: approvers ? `Approvers: ${approvers}` : undefined,
 		};
-	return {
-		turn: "you",
-		tone: "action",
-		title: what,
-		detail: flags
-			? request.flags[0].message
-			: "Prices come from the catalog and pricing rules. Nothing is sent until you approve.",
-	};
+	return { turn: "you", tone: "action", title: what };
 }
 
 const look: Record<
@@ -143,22 +130,22 @@ const look: Record<
 > = {
 	action: {
 		icon: Hand,
-		className: "border-[var(--orb-royal)]/40 bg-secondary",
+		className: "text-[var(--orb-royal)]",
 		label: "Your move",
 	},
 	warn: {
 		icon: TriangleAlert,
-		className: "border-status-review/40 bg-status-review/10",
+		className: "text-status-review",
 		label: "Needs attention",
 	},
 	waiting: {
 		icon: Clock3,
-		className: "border-border bg-muted/50",
+		className: "text-muted-foreground",
 		label: "Waiting",
 	},
 	done: {
 		icon: CheckCircle2,
-		className: "border-status-approved/30 bg-status-approved/10",
+		className: "text-status-approved",
 		label: "Done",
 	},
 };
@@ -169,16 +156,11 @@ export function NextActionBanner({ request }: { request: RequestRow }) {
 	const next = nextAction(request, business, me);
 	const l = look[next.tone];
 	return (
-		<output
-			className={cn(
-				"flex items-start gap-2.5 rounded-lg border p-3",
-				l.className,
-			)}
-		>
-			<l.icon className="mt-0.5 size-4 shrink-0" />
+		<output className="flex items-start gap-2.5 bg-muted/60 px-3 py-2.5">
+			<l.icon className={cn("mt-0.5 size-4 shrink-0", l.className)} />
 			<span className="min-w-0">
 				<span className="block text-[10px] font-semibold tracking-wide text-muted-foreground uppercase">
-					Next · {l.label}
+					Next step · {l.label}
 				</span>
 				<span className="block text-sm font-medium">{next.title}</span>
 				{next.detail && (

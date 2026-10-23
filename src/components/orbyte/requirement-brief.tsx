@@ -1,12 +1,10 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
-	Bot,
 	Check,
 	CircleDashed,
 	FilePlus2,
 	FileText,
 	Loader2,
-	MessageCircleQuestion,
 	PackageX,
 	Pencil,
 	Plus,
@@ -87,7 +85,7 @@ function Evidence({ messageId }: { messageId: string }) {
 				{open ? "hide source" : "source"}
 			</button>
 			{open && (
-				<span className="mt-1 block basis-full rounded-md border-l-2 border-[var(--orb-royal)] bg-muted/60 px-2 py-1 text-xs text-foreground">
+				<span className="mt-1 block basis-full bg-muted/60 px-2 py-1 text-xs text-foreground">
 					{m ? (
 						<>
 							“{m.body}”
@@ -119,9 +117,6 @@ export function RequirementBrief({ request }: { request: RequestRow }) {
 		request.quote?.status === "draft" &&
 			!quoteAgreementIssue(request.quote, request),
 	);
-	const pct = a.requiredTotal
-		? Math.round((a.requiredAnswered / a.requiredTotal) * 100)
-		: 0;
 
 	async function run(
 		fn: () => Promise<unknown>,
@@ -152,58 +147,21 @@ export function RequirementBrief({ request }: { request: RequestRow }) {
 			success,
 		);
 
-	const next = a.missing[0];
-	const stageText =
-		request.status === "gathering"
-			? next
-				? `AI is asking the customer. Next: ${describeNext(next)}`
-				: "AI is gathering details."
-			: request.status === "confirming"
-				? "All details in. Waiting for the customer to confirm the summary."
-				: drafted
-					? "The draft captures the requirements below. Review it before sending."
-					: open
-						? "Review the requirements and prepare a current draft."
-						: request.status === "approved"
-							? "Quotation sent."
-							: "Closed.";
-
 	return (
 		<ConversationCtx.Provider value={request.conversationId}>
 			<section className="space-y-3">
-				<div className="flex items-center justify-between gap-2">
-					<h3 className="text-xs font-semibold tracking-wide text-muted-foreground uppercase">
-						Requirement brief · version {request.briefVersion}
-					</h3>
-					{a.requiredTotal > 0 && (
-						<span className="text-xs text-muted-foreground tabular-nums">
-							{a.requiredAnswered}/{a.requiredTotal} required
-						</span>
-					)}
-				</div>
-				{a.requiredTotal > 0 && (
-					<div className="h-1.5 overflow-hidden rounded-full bg-muted">
-						<div
-							className="h-full rounded-full bg-[var(--orb-royal)] transition-all"
-							style={{ width: `${pct}%` }}
-						/>
-					</div>
-				)}
 				{brief.revisionOf && (
-					<p className="flex items-center gap-2 rounded-md bg-status-draft/10 px-3 py-2 text-xs">
-						<RotateCcw className="size-3.5 text-status-draft" /> The customer is
-						changing a quotation that was already sent. Confirming creates a new
-						revision.
+					<p className="flex items-center gap-2 bg-muted/60 px-3 py-2 text-xs">
+						<RotateCcw className="size-3.5 text-status-draft" /> Changing a sent
+						quotation
 					</p>
 				)}
 				<p className="text-sm">
 					{brief.summary || "Waiting for the first details."}
 				</p>
-				<p className="flex items-start gap-1.5 text-xs text-muted-foreground">
-					<Bot className="mt-px size-3.5 shrink-0" /> {stageText}
-				</p>
+
 				{open && stock.length > 0 && (
-					<div className="space-y-1 rounded-md bg-status-review/10 px-3 py-2 text-xs">
+					<div className="space-y-1 bg-muted/60 px-3 py-2 text-xs">
 						<p className="flex items-center gap-1.5 font-medium">
 							<PackageX className="size-3.5 text-status-review" />
 							Availability
@@ -235,7 +193,7 @@ export function RequirementBrief({ request }: { request: RequestRow }) {
 				))}
 
 				{a.general.length > 0 && brief.items.length > 0 && (
-					<div className="rounded-lg border">
+					<div className="border">
 						<p className="border-b px-3 py-2 text-sm font-medium">
 							About the customer
 						</p>
@@ -262,7 +220,7 @@ export function RequirementBrief({ request }: { request: RequestRow }) {
 				)}
 
 				{brief.followUps.length > 0 && (
-					<div className="rounded-lg border">
+					<div className="border">
 						<p className="border-b px-3 py-2 text-sm font-medium">Follow-ups</p>
 						<ul className="divide-y">
 							{brief.followUps.map((f) => (
@@ -322,21 +280,6 @@ export function RequirementBrief({ request }: { request: RequestRow }) {
 	);
 }
 
-function describeNext(m: ReturnType<typeof assess>["missing"][number]) {
-	switch (m.kind) {
-		case "need":
-			return "what they need";
-		case "identify":
-			return `which product "${m.item.rawText}" is`;
-		case "quantity":
-			return `quantity of ${m.product.name}`;
-		case "question":
-			return m.question.label;
-		case "follow_up":
-			return m.followUp.question;
-	}
-}
-
 function ItemCard(props: {
 	view: ItemView;
 	open: boolean;
@@ -349,7 +292,7 @@ function ItemCard(props: {
 	const fullProduct = business.products.find((p) => p.id === product?.id);
 
 	return (
-		<div className="rounded-lg border">
+		<div className="border">
 			<div className="flex items-start justify-between gap-2 border-b px-3 py-2">
 				<div className="min-w-0">
 					<p className="text-sm font-medium">
@@ -368,7 +311,7 @@ function ItemCard(props: {
 				</div>
 				<div className="flex shrink-0 items-center gap-1.5">
 					{product?.pricingMode === "custom" && (
-						<span className="rounded-full bg-secondary px-2 py-0.5 text-[10px] font-medium text-primary">
+						<span className="bg-secondary px-1.5 py-0.5 text-[10px] font-medium text-primary">
 							Custom-priced
 						</span>
 					)}
@@ -406,7 +349,7 @@ function ItemCard(props: {
 								disabled={!props.open}
 								onClick={() => setQtyDraft(String(item.quantity ?? ""))}
 								className={cn(
-									"rounded px-1.5 py-0.5 text-xs tabular-nums",
+									"px-1.5 py-0.5 text-xs tabular-nums",
 									props.open && "hover:bg-muted",
 									item.quantity === null &&
 										needsQuantity(product) &&
@@ -437,7 +380,7 @@ function ItemCard(props: {
 									`Matched to ${c.name}`,
 								)
 							}
-							className="rounded-full border px-2 py-0.5 hover:bg-muted"
+							className="border px-2 py-0.5 hover:bg-muted"
 						>
 							{c.name}
 						</button>
@@ -475,11 +418,6 @@ function ItemCard(props: {
 						/>
 					))}
 				</ul>
-			)}
-			{item.reason && (
-				<p className="border-t px-3 py-1.5 text-[11px] text-muted-foreground">
-					AI: {item.reason}
-				</p>
 			)}
 		</div>
 	);
@@ -627,7 +565,7 @@ function IconButton(props: {
 			type="button"
 			title={props.title}
 			onClick={props.onClick}
-			className="rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground [&_svg]:size-3.5"
+			className="p-1 text-muted-foreground hover:bg-muted hover:text-foreground [&_svg]:size-3.5"
 		>
 			{props.children}
 			<span className="sr-only">{props.title}</span>
@@ -663,7 +601,7 @@ function AnswerEditor(props: {
 									)
 								}
 								className={cn(
-									"rounded-full border px-2 py-0.5 text-xs",
+									"border px-2 py-0.5 text-xs",
 									on && "border-primary bg-primary text-primary-foreground",
 								)}
 							>
@@ -859,7 +797,7 @@ function StaffControls(props: {
 }) {
 	const [question, setQuestion] = useState("");
 	return (
-		<div className="space-y-2 rounded-lg bg-muted/60 p-3">
+		<div className="space-y-2 border-t pt-3">
 			<form
 				className="flex gap-2"
 				onSubmit={async (e) => {
@@ -914,13 +852,6 @@ function StaffControls(props: {
 					</Button>
 				)}
 			</div>
-			<p className="flex items-start gap-1.5 text-[11px] text-muted-foreground">
-				<MessageCircleQuestion className="mt-px size-3.5 shrink-0" />
-				"Ask now" sends the AI's next question (or the recap) without waiting
-				for the customer. An approver can use "Draft now" once required details
-				are resolved or explicitly waived. It prepares a draft from what we
-				know.
-			</p>
 		</div>
 	);
 }

@@ -528,7 +528,7 @@ function Conversation({ row, onBack }: { row: InboxRow; onBack: () => void }) {
 					)}
 				>
 					{request ? (
-						<RequestDetail request={request} showActivity />
+						<RequestDetail key={request.id} request={request} showActivity />
 					) : (
 						<div className="p-6 text-sm text-muted-foreground">
 							No quote request yet for this chat.

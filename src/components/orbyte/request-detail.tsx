@@ -1,5 +1,6 @@
 import { Link } from "@tanstack/react-router";
-import { AlertTriangle, ArrowLeft, PenLine, RotateCcw } from "lucide-react";
+import { AlertTriangle, ArrowLeft, FileText, PenLine } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
 import { ActivityFeed } from "#/components/activity-feed";
 import { FollowUpPanel } from "#/components/orbyte/follow-up-panel";
 import { NextActionBanner } from "#/components/orbyte/next-action";
@@ -8,7 +9,10 @@ import { useWorkspace } from "#/components/orbyte/workspace";
 import { QuoteEditor } from "#/components/quote-editor";
 import { quoteBadge, StatusBadge } from "#/components/status-badge";
 import { Button } from "#/components/ui/button";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "#/components/ui/tabs";
 import { agreementChanges, quoteAgreementIssue } from "#/lib/agreements";
+import { assess } from "#/lib/intake";
+import { formatMYR } from "#/lib/money";
 import type { RequestRow } from "#/lib/types";
 import { cn } from "#/lib/utils";
 
@@ -43,178 +47,208 @@ export function RequestDetail(props: {
 		request.status === "approved" ||
 		request.status === "rejected";
 
+	const { quote } = request;
+	const hasQuote = Boolean(quote);
+	const [tab, setTab] = useState<Tab>(hasQuote ? "quote" : "brief");
+	// Open the quotation as soon as a draft arrives.
+	const quoteId = quote?.id;
+	const seen = useRef(quoteId);
+	useEffect(() => {
+		if (quoteId && quoteId !== seen.current) setTab("quote");
+		seen.current = quoteId;
+	}, [quoteId]);
+	const a = assess(request.brief, business.products, business.questions);
+	const attention = request.flags.length > 0 && drafted;
+
 	return (
-		<div className="space-y-4 p-4">
-			<div className="flex items-center gap-2">
-				{props.onBack && (
-					<Button
-						variant="ghost"
-						size="icon"
-						className="size-8"
-						onClick={props.onBack}
-					>
-						<ArrowLeft className="size-4" />
-					</Button>
-				)}
-				<div className="min-w-0 flex-1">
-					<p className="truncate font-semibold">{request.customerName}</p>
-					<p className="text-xs text-muted-foreground">
-						{languageName[request.brief.language]}
-					</p>
+		<Tabs value={tab} onValueChange={(v) => setTab(v as Tab)} className="gap-0">
+			<div className="space-y-3 p-4 pb-3">
+				<div className="flex items-center gap-2">
+					{props.onBack && (
+						<Button
+							variant="ghost"
+							size="icon"
+							className="size-8"
+							onClick={props.onBack}
+						>
+							<ArrowLeft className="size-4" />
+						</Button>
+					)}
+					<div className="min-w-0 flex-1">
+						<p className="truncate font-semibold">{request.customerName}</p>
+						<p className="text-xs text-muted-foreground">
+							{languageName[request.brief.language]}
+						</p>
+					</div>
+					{/* Once signed, say so rather than the request's "approved" stage. */}
+					<StatusBadge
+						status={
+							quote?.status === "accepted" || quote?.status === "lost"
+								? quoteBadge(quote.status)
+								: request.status
+						}
+					/>
 				</div>
-				{/* Once signed, say so rather than the request's "approved" stage. */}
-				<StatusBadge
-					status={
-						request.quote?.status === "accepted" ||
-						request.quote?.status === "lost"
-							? quoteBadge(request.quote.status)
-							: request.status
-					}
-				/>
+				<NextActionBanner request={request} />
 			</div>
 
-			<NextActionBanner request={request} />
-			<RequirementBrief request={request} />
-			{request.baselineQuote && (
-				<section className="space-y-2 rounded-lg border bg-status-review/5 p-3">
-					<h3 className="text-sm font-semibold">
-						Changes from {request.baselineQuote.number}
-						{request.baselineQuote.signedAt ? " (signed agreement)" : ""}
-					</h3>
-					<p className="text-xs text-muted-foreground">
-						The earlier agreement stays in effect until the revised quotation is
-						approved and signed. The PIC must review outstanding work after a
-						signed project change.
-					</p>
-					<ul className="space-y-1 text-sm">
-						{changes.map((change) => (
-							<li key={change.label}>
-								<span className="font-medium">{change.label}</span>:{" "}
-								{change.before} → {change.after}
-							</li>
-						))}
-					</ul>
-				</section>
-			)}
+			<div className="sticky top-0 z-10 border-b bg-card px-1">
+				<TabsList
+					variant="line"
+					className="h-10 w-full justify-start gap-0 p-0"
+				>
+					<TabsTrigger
+						value="brief"
+						className="h-10 flex-none rounded-none border-0 border-b-2 border-transparent px-3 text-[13px] font-medium text-muted-foreground shadow-none after:hidden focus-visible:border-transparent focus-visible:bg-muted focus-visible:ring-0 focus-visible:outline-none data-[state=active]:border-b-[var(--orb-royal)] data-[state=active]:text-foreground"
+					>
+						Requirements
+						{a.requiredTotal > 0 && (
+							<span className="text-[11px] text-muted-foreground tabular-nums">
+								{a.requiredAnswered}/{a.requiredTotal}
+							</span>
+						)}
+					</TabsTrigger>
+					<TabsTrigger
+						value="quote"
+						className="h-10 flex-none rounded-none border-0 border-b-2 border-transparent px-3 text-[13px] font-medium text-muted-foreground shadow-none after:hidden focus-visible:border-transparent focus-visible:bg-muted focus-visible:ring-0 focus-visible:outline-none data-[state=active]:border-b-[var(--orb-royal)] data-[state=active]:text-foreground"
+					>
+						Quotation
+						{attention ? (
+							<span
+								className="size-1.5 bg-status-review"
+								aria-label="needs checking"
+							/>
+						) : quote ? (
+							<span className="text-[11px] text-muted-foreground tabular-nums">
+								{formatMYR(quote.totalSen)}
+							</span>
+						) : null}
+					</TabsTrigger>
+					{props.showActivity !== false && (
+						<TabsTrigger
+							value="activity"
+							className="h-10 flex-none rounded-none border-0 border-b-2 border-transparent px-3 text-[13px] font-medium text-muted-foreground shadow-none after:hidden focus-visible:border-transparent focus-visible:bg-muted focus-visible:ring-0 focus-visible:outline-none data-[state=active]:border-b-[var(--orb-royal)] data-[state=active]:text-foreground"
+						>
+							Activity
+						</TabsTrigger>
+					)}
+				</TabsList>
+			</div>
 
-			{request.flags.length > 0 && drafted && (
-				<section>
-					<h3 className="mb-1 text-xs font-semibold tracking-wide text-muted-foreground uppercase">
-						Needs staff attention
-					</h3>
-					<ul className="space-y-1">
-						{request.flags.map((f, i) => (
-							<li
-								key={`${f.kind}-${i}`}
-								className={cn(
-									"flex items-start gap-2 rounded-md px-3 py-2 text-sm",
-									f.kind === "custom_pricing"
-										? "bg-secondary"
-										: "bg-status-review/10",
-								)}
-							>
-								<AlertTriangle
-									className={cn(
-										"mt-0.5 size-4 shrink-0",
-										f.kind === "custom_pricing"
-											? "text-primary"
-											: "text-status-review",
-									)}
-								/>
-								<span>
-									{f.message}
-									{f.options && f.options.length > 0 && (
-										<span className="block text-xs text-muted-foreground">
-											Options: {f.options.join(" / ")}
+			<TabsContent value="brief" className="space-y-4 p-4">
+				{request.baselineQuote && changes.length > 0 && (
+					<section className="space-y-1.5 bg-muted/60 px-3 py-2.5">
+						<h3 className="text-sm font-semibold">
+							Changes from {request.baselineQuote.number}
+							{request.baselineQuote.signedAt ? " (signed)" : ""}
+						</h3>
+						<ul className="space-y-1 text-sm">
+							{changes.map((change) => (
+								<li key={change.label}>
+									<span className="font-medium">{change.label}</span>:{" "}
+									{change.before} → {change.after}
+								</li>
+							))}
+						</ul>
+					</section>
+				)}
+				<RequirementBrief request={request} />
+			</TabsContent>
+
+			<TabsContent value="quote" className="space-y-3 p-4">
+				{!quote ? (
+					<div className="border border-dashed p-6 text-center text-sm text-muted-foreground">
+						<FileText className="mx-auto mb-2 size-5" />
+						No quotation yet
+					</div>
+				) : (
+					<>
+						{attention && (
+							<ul className="space-y-1.5">
+								{request.flags.map((f, i) => (
+									<li
+										key={`${f.kind}-${i}`}
+										className={cn(
+											"flex items-start gap-2 bg-muted/60 px-3 py-2 text-sm",
+										)}
+									>
+										<AlertTriangle
+											className={cn(
+												"mt-0.5 size-4 shrink-0",
+												f.kind === "custom_pricing"
+													? "text-primary"
+													: "text-status-review",
+											)}
+										/>
+										<span>
+											{f.message}
+											{f.options && f.options.length > 0 && (
+												<span className="block text-xs text-muted-foreground">
+													Options: {f.options.join(" / ")}
+												</span>
+											)}
 										</span>
-									)}
-								</span>
-							</li>
-						))}
-					</ul>
-				</section>
-			)}
-
-			{request.quote && (
-				<section>
-					{!!draftChanges.length && (
-						<div className="mb-3 rounded-md border p-3 text-sm">
-							<p className="mb-1 font-medium">
-								Changes since this draft was prepared
-							</p>
-							<ul>
-								{draftChanges.map((c) => (
-									<li key={c.label}>
-										{c.label}: {c.before} → {c.after}
 									</li>
 								))}
 							</ul>
-						</div>
-					)}
-					<h3 className="mb-1 text-xs font-semibold tracking-wide text-muted-foreground uppercase">
-						Quotation · requirements version{" "}
-						{request.quote.requirementVersion ?? "not captured"}
-					</h3>
-					{request.quote.revision > 1 && (
-						<p className="mb-2 flex items-center gap-2 rounded-md bg-muted px-3 py-2 text-sm">
-							<RotateCcw className="size-4 text-muted-foreground" />
-							Revision {request.quote.revision}: replaces the quotation sent
-							earlier once approved.
-						</p>
-					)}
-					{request.quote.status === "approved" && (
-						<p className="mb-2 flex items-center gap-2 rounded-md bg-status-draft/10 px-3 py-2 text-sm">
-							<PenLine className="size-4 text-status-draft" />
-							Sent on WhatsApp — waiting for the customer to sign
-							{request.quote.viewedAt ? " (opened)" : ""}.
-						</p>
-					)}
-					{(request.quote.status === "approved" ||
-						request.quote.status === "lost") && (
-						<div className="mb-2">
-							<FollowUpPanel quote={request.quote} />
-						</div>
-					)}
-					{request.quote.status === "accepted" && (
-						<p className="mb-2 flex flex-wrap items-center gap-2 rounded-md bg-status-approved/10 px-3 py-2 text-sm">
-							<PenLine className="size-4 text-status-approved" />
-							Signed by {request.quote.signerName} on{" "}
-							{request.quote.signedAt?.toLocaleString("en-MY")}.
-							{request.job ? (
-								<Link
-									to="/orbyte/$businessId/work/$jobId"
-									params={{ businessId: business.id, jobId: request.job.id }}
-									className="font-medium text-primary hover:underline"
-								>
-									Open job {request.job.number} →
-								</Link>
-							) : (
-								<span className="text-muted-foreground">Creating the job…</span>
-							)}
-						</p>
-					)}
-					<QuoteEditor
-						key={`${request.quote.id}:${JSON.stringify(request.quote.lineItems)}:${request.quote.notes}:${request.quote.status}`}
-						business={business}
-						quote={request.quote}
-						actingAs={actingAs}
-						onHold={
-							request.quote.status === "draft"
-								? quoteAgreementIssue(request.quote, request)
-								: null
-						}
-					/>
-				</section>
-			)}
+						)}
+						{!!draftChanges.length && (
+							<div className="bg-muted/60 px-3 py-2 text-sm">
+								<p className="mb-1 font-medium">Changed since this draft</p>
+								<ul>
+									{draftChanges.map((c) => (
+										<li key={c.label}>
+											{c.label}: {c.before} → {c.after}
+										</li>
+									))}
+								</ul>
+							</div>
+						)}
+						{quote.status === "accepted" && (
+							<p className="flex flex-wrap items-center gap-2 bg-muted/60 px-3 py-2 text-sm">
+								<PenLine className="size-4 text-status-approved" />
+								Signed by {quote.signerName},{" "}
+								{quote.signedAt?.toLocaleString("en-MY")}
+								{request.job ? (
+									<Link
+										to="/orbyte/$businessId/work/$jobId"
+										params={{ businessId: business.id, jobId: request.job.id }}
+										className="font-medium text-primary hover:underline"
+									>
+										Job {request.job.number} →
+									</Link>
+								) : (
+									<span className="text-muted-foreground">
+										Creating the job…
+									</span>
+								)}
+							</p>
+						)}
+						<QuoteEditor
+							key={`${quote.id}:${JSON.stringify(quote.lineItems)}:${quote.notes}:${quote.status}`}
+							business={business}
+							quote={quote}
+							actingAs={actingAs}
+							onHold={
+								quote.status === "draft"
+									? quoteAgreementIssue(quote, request)
+									: null
+							}
+						/>
+						{(quote.status === "approved" || quote.status === "lost") && (
+							<FollowUpPanel quote={quote} />
+						)}
+					</>
+				)}
+			</TabsContent>
 
 			{props.showActivity !== false && (
-				<section>
-					<h3 className="mb-2 text-xs font-semibold tracking-wide text-muted-foreground uppercase">
-						Activity
-					</h3>
+				<TabsContent value="activity" className="p-4">
 					<ActivityFeed businessId={business.id} requestId={request.id} />
-				</section>
+				</TabsContent>
 			)}
-		</div>
+		</Tabs>
 	);
 }
+
+type Tab = "brief" | "quote" | "activity";
