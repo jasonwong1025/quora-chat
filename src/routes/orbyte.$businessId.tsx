@@ -77,7 +77,7 @@ type NavItem = {
 };
 
 function Shell() {
-	const { business, me } = useWorkspace();
+	const { business } = useWorkspace();
 	const [open, setOpen] = useState(false);
 	const location = useLocation();
 
@@ -97,12 +97,10 @@ function Shell() {
 		...orpc.relays.pending.queryOptions({ input: { businessId: business.id } }),
 		refetchInterval: 4000,
 	});
-	const myOpenJobs =
-		jobs.data?.filter(
-			(j) =>
-				(j.picId === me?.id || (me && j.memberIds.includes(me.id))) &&
-				["preparing", "upcoming", "active"].includes(j.status),
-		).length ?? 0;
+	// Signed jobs that haven't started yet (including ones still being handed over).
+	const upcomingJobs =
+		jobs.data?.filter((j) => ["preparing", "upcoming"].includes(j.status))
+			.length ?? 0;
 	const awaiting =
 		(inbox.data?.filter((c) => c.awaitingReply).length ?? 0) +
 		(approvals.data?.length ?? 0);
@@ -130,7 +128,7 @@ function Shell() {
 					to: "/orbyte/$businessId/work",
 					label: "Work",
 					icon: ListChecks,
-					count: myOpenJobs,
+					count: upcomingJobs,
 				},
 				{ to: "/orbyte/$businessId/esign", label: "eSign", icon: PenLine },
 				{ to: "/orbyte/$businessId/connect", label: "Connect", icon: Plug },

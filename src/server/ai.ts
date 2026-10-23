@@ -320,7 +320,7 @@ The latest customer message ${input.latestHasAttachment ? "HAS a file attached" 
 
 Rules:
 - Read the whole conversation, but focus on what the latest customer message adds or changes. Later messages override earlier ones.
-- items: return every item the customer still wants. Reuse the ref of existing items; use ref "" for new ones. Set removed=true on an existing item they no longer want. An item is something they want to buy; a question ("how much?", "berapa harga?", "什么价钱？") is never an item.
+- items: return every item the customer still wants. Reuse the ref of existing items; use ref "" for new ones. Set removed=true on an existing item they no longer want. An item is something they want to buy; a question ("how much?", "berapa harga?", "什么价钱？") is never an item, and neither is a wish about how the work is done (progress updates, communication, demos, timing).
 - match="exact" only when exactly one catalog product clearly fits (set productId). "ambiguous" when several could fit (productId=null, list candidateProductIds). "none" when nothing fits. Products with available=false still match normally (we'll tell the customer it's unavailable); don't treat them as "none".
 - quantity: only a number the customer stated or clearly implied ("two units" = 2). Otherwise null. Never assume.
 - answers: only keys from that product's questions. Only what the customer said or clearly implied, in any message. Map their words to the exact option text for single/multi/yes_no questions (e.g. "double side" → "double", "挂墙式" → "wall-mounted", "ya"/"boleh"/"可以" → "yes"). For number questions give the number or a short range in their words ("around 50"). For date questions, give the date as YYYY-MM-DD, working it out from today (${input.today}, Malaysia): "next Friday" / "Jumaat depan" / "下个星期五" = that weekday in the following Monday-to-Sunday week; "this Friday" = the coming one; "end of March" = the last day of March. Keep their words only when no specific date follows from them (e.g. "ASAP", "sometime in spring"). For file questions, answer ["<attachment>"] only if the latest message has a file that fits. Never invent, assume or default an answer.
@@ -384,6 +384,8 @@ export type Ask = {
 	type: string;
 	options: string[];
 	hint: string | null;
+	/** Nice to have: the customer may skip it. */
+	optional: boolean;
 	repeat: boolean; // asked before and still unanswered
 };
 
@@ -426,10 +428,10 @@ function planText(plan: ReplyPlan) {
 		case "identify":
 			return `They mentioned "${plan.rawText}", which could be: ${plan.options.join(" / ")}. Ask which one they mean, casually.`;
 		case "gathering":
-			return `Ask about the following (rephrase naturally, don't copy word for word). We're still gathering details, so don't say you'll send a quote or check with the team yet; just ask.\n${plan.asks
+			return `Ask about the following${plan.asks.length > 1 ? " all in this one message, as a short numbered list (one line each; you may join two closely related ones into one line if it stays clear)" : ""}. Rephrase naturally, don't copy word for word. Say "(optional)" only for the ones marked OPTIONAL below; all others are needed. We're still gathering details, so don't say you'll send a quote or check with the team yet; just ask.\n${plan.asks
 				.map(
 					(a, i) =>
-						`${i + 1}. ${a.about ? `[${a.about}] ` : ""}${a.question}${
+						`${i + 1}. ${a.about ? `[${a.about}] ` : ""}${a.question}${a.optional ? " (OPTIONAL)" : ""}${
 							a.options.length ? ` (options: ${a.options.join(" / ")})` : ""
 						}${a.type === "file" ? " (they can send a photo or document here in the chat; it's optional, so make that clear)" : ""}${
 							a.hint ? ` (note: ${a.hint})` : ""
@@ -485,21 +487,22 @@ How to write:
 - Match the customer's register. If they write casual Manglish or rojak, you can be casual too (a light "ya", "can", "boleh", "ok noted" is fine; don't overdo "lah"). If they're formal, be polite. For Bahasa Melayu use everyday Malay, not stiff textbook Malay. For Chinese use natural simplified Chinese.
 - ${input.firstReply ? `This is your first reply, so a short hello is fine${input.customerName ? ` (their name: ${input.customerName}; if you use it, write it exactly like that, never shortened)` : ""}.` : "Don't greet again; you're mid-conversation."}
 - Briefly acknowledge what they just said when it helps (a few words, e.g. "Ok, 500 pcs noted"), then get to the point. Don't open every message with "Thank you" or "Great!".
-- Ask only what you're told to ask, in one flowing message. Offer options the way people talk ("single or double sided?"), not like a form. If there are two questions, a tiny numbered list is ok.
-- Usually 1-3 short sentences. Keep it under ~60 words, except a recap list.
+- Ask only what you're told to ask, all in this message. Offer options the way people talk ("single or double sided?"), not like a form. Several questions go in one short numbered list.
+- Usually 1-3 short sentences. Keep it under ~60 words, except a numbered list of questions or a recap list.
+- You speak for the ${b.name} team. Never give yourself a personal name, and never use the customer's name as yours. If they ask who they're talking to, say they're chatting with the ${b.name} team; you don't need to name anyone.
 - Avoid stiff phrases: "kindly", "please be informed", "we would like to", "Dear", "valued customer", "I hope this message finds you well", "Thank you for reaching out", "as an AI".
 - At most one emoji, and only if the customer seems casual.
 - Never mention or hint at prices, discounts, totals or estimates. Don't promise dates or availability, except the stock facts you're given below, stated exactly.
 - Plain text. *bold* only if really useful. No sign-off or signature, and don't add our address or phone unless they ask.
 
 What you know about the business (use only this, never make things up):
-${info || "(nothing extra)"}${faq ? `\n\nThe business's published FAQ (you may use it to answer their question, in your own words; still never mention prices):\n${faq}` : ""}`;
+${info || "(nothing extra)"}${faq ? `\n\nThe business's published FAQ, relevant to this chat. When they ask about, or mention wanting, something it covers, answer from it in your own words (one short sentence) instead of saying the team will check. Otherwise you may mention one point briefly only if it genuinely helps. Don't recite it. Still never mention prices:\n${faq}` : ""}`;
 
 	const extra = [
 		input.customerQuestion &&
-			`They also asked: "${input.customerQuestion}". Answer it first if the business info above covers it; otherwise say you'll check with the team.`,
+			`They also asked: "${input.customerQuestion}". Answer it first if the business info or FAQ above covers it; otherwise say you'll check with the team.`,
 		input.notOffered.length > 0 &&
-			`They asked about something we don't list (${input.notOffered.join(", ")}). Say the team will check whether we can help with that.`,
+			`They asked about something we don't list (${input.notOffered.join(", ")}). If the FAQ above covers it, answer from the FAQ; otherwise say the team will check whether we can help with that.`,
 		...(input.availability ?? []).map(availabilityText),
 	]
 		.filter(Boolean)

@@ -539,6 +539,7 @@ function toAsk(m: Missing, asked: Set<string>): Ask | null {
 				type: "number",
 				options: [],
 				hint: null,
+				optional: false,
 				repeat,
 			};
 		case "question":
@@ -548,6 +549,7 @@ function toAsk(m: Missing, asked: Set<string>): Ask | null {
 				type: m.question.type,
 				options: m.question.options,
 				hint: m.question.hint,
+				optional: !m.question.required,
 				repeat,
 			};
 		case "follow_up":
@@ -557,6 +559,7 @@ function toAsk(m: Missing, asked: Set<string>): Ask | null {
 				type: "text",
 				options: [],
 				hint: null,
+				optional: false,
 				repeat,
 			};
 		default:
@@ -927,6 +930,7 @@ async function advanceRequest(a: Advance): Promise<{
 								business.id,
 								a.customerQuestion,
 								a.run,
+								[brief.summary, latestCustomerBody(a.history)],
 							),
 							notOffered,
 							// The recap already carries the note next to the item.
@@ -1224,41 +1228,49 @@ function fallbackReply(language: Language) {
  * Published FAQ passages for a customer's question. Only "public" docs: internal
  * knowledge is never loaded for the customer-facing AI, whatever the message says.
  */
+const latestCustomerBody = (history: ChatTurn[]) =>
+	[...history].reverse().find((m) => m.sender === "customer")?.body ?? "";
+
+/**
+ * Public FAQ passages for this reply. Every reply gets the ones relevant to the
+ * chat (not only when they ask something), so the AI can mention a policy when
+ * it helps. Only Public documents ever reach the customer-facing AI.
+ */
 async function publicFaq(
 	businessId: string,
 	question: string | null,
 	run: Run,
+	context: (string | null | undefined)[] = [],
 ) {
-	if (!question) return [];
-	const passages = await findKnowledge(
-		businessId,
-		"customer",
-		question,
-		3,
-	).catch(() => []);
-	// Staff can see what the customer was told it from, or that nothing covered it.
-	await run.add(
-		passages.length
-			? {
-					kind: "check",
-					title: `Answered their question from the public FAQ`,
-					detail: [
-						`Question: ${question}`,
-						...[...new Set(passages.map((p) => p.title))].map(
-							(t) => `Source: ${t}`,
-						),
-						"Only Public documents are given to the customer-facing AI.",
-					],
-				}
-			: {
-					kind: "check",
-					title: "No public FAQ covers their question",
-					detail: [
-						`Question: ${question}`,
-						"Told them the team will check, rather than guessing.",
-					],
-				},
+	const query = [question, ...context].filter(Boolean).join(" ");
+	if (!query.trim()) return [];
+	const passages = await findKnowledge(businessId, "customer", query, 3).catch(
+		() => [],
 	);
+	// Staff can see what the customer was told it from, or that nothing covered it.
+	if (passages.length)
+		await run.add({
+			kind: "check",
+			title: question
+				? "Answered their question from the public FAQ"
+				: "Public FAQ given to the reply",
+			detail: [
+				...(question ? [`Question: ${question}`] : []),
+				...[...new Set(passages.map((p) => p.title))].map(
+					(t) => `Source: ${t}`,
+				),
+				"Only Public documents are given to the customer-facing AI.",
+			],
+		});
+	else if (question)
+		await run.add({
+			kind: "check",
+			title: "No public FAQ covers their question",
+			detail: [
+				`Question: ${question}`,
+				"Told them the team will check, rather than guessing.",
+			],
+		});
 	return passages;
 }
 
@@ -1792,7 +1804,12 @@ async function* customerTurn(
 							"Answer their question about this quotation using the agreed requirements. Do not change the scope, price or promise new work.",
 					},
 					customerQuestion: reading.customerQuestion,
-					knowledge: await publicFaq(businessId, reading.customerQuestion, run),
+					knowledge: await publicFaq(
+						businessId,
+						reading.customerQuestion,
+						run,
+						[reading.summary, latestCustomerBody(history)],
+					),
 					notOffered: [],
 					history,
 					firstReply: false,
@@ -1886,7 +1903,10 @@ async function* customerTurn(
 					? { stage: "chat" }
 					: { stage: "need", offerings: offerings(products) },
 				customerQuestion: reading.customerQuestion,
-				knowledge: await publicFaq(businessId, reading.customerQuestion, run),
+				knowledge: await publicFaq(businessId, reading.customerQuestion, run, [
+					reading.summary,
+					latestCustomerBody(history),
+				]),
 				notOffered: [],
 				history,
 				firstReply: !history.some((m) => m.sender !== "customer"),

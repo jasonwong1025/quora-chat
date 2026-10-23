@@ -329,24 +329,47 @@ export function assess(
 	};
 }
 
-/** The next one or two things to ask, keeping questions about the same item together. */
-export function nextToAsk(missing: Missing[], max = 2): Missing[] {
+/**
+ * The topic a question belongs to, so related questions go in one message:
+ * the item itself (quantity and its own questions), then everything general
+ * (timing, budget, about the customer), then the AI's clarifying follow-ups.
+ */
+export function topicOf(m: Missing): string {
+	switch (m.kind) {
+		case "quantity":
+			return `item:${m.item.id}`;
+		case "question":
+			return m.item && m.question.scope === "product"
+				? `item:${m.item.id}`
+				: "general";
+		default:
+			return m.kind;
+	}
+}
+
+/** A long WhatsApp message stops being answerable past this. */
+export const MAX_PER_MESSAGE = 8;
+
+/**
+ * Everything still missing on one topic, asked together in one message (required
+ * first). What they need, or which product they mean, is always asked on its own.
+ */
+export function nextToAsk(
+	missing: Missing[],
+	max = MAX_PER_MESSAGE,
+): Missing[] {
 	const first = missing[0];
 	if (!first) return [];
 	if (first.kind === "need" || first.kind === "identify") return [first];
-	const group = (m: Missing) =>
-		m.kind === "question" || m.kind === "quantity"
-			? (m.item?.id ?? "general")
-			: m.kind;
-	// Two questions with long option lists in one message is too much.
-	const heavy = (m: Missing) =>
-		m.kind === "question" &&
-		(m.question.type === "file" || m.question.options.length > 4);
-	const picked: Missing[] = [first];
-	for (const m of missing.slice(1)) {
-		if (picked.length >= max) break;
-		if (group(m) !== group(first) || heavy(m) || heavy(first)) break;
-		picked.push(m);
-	}
-	return picked;
+	const topic = topicOf(first);
+	let files = 0;
+	return missing
+		.filter((m) => topicOf(m) === topic)
+		.filter((m) => {
+			// One "send us a file" request per message is plenty.
+			if (m.kind !== "question" || m.question.type !== "file") return true;
+			files++;
+			return files === 1;
+		})
+		.slice(0, max);
 }

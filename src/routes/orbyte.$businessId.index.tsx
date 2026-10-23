@@ -122,7 +122,7 @@ function Home() {
 			to: "/orbyte/$businessId/people" as const,
 			icon: Users,
 			name: "People",
-			text: "Leave, claims and directory",
+			text: "Company directory",
 		},
 		{
 			to: "/orbyte/$businessId/work" as const,
