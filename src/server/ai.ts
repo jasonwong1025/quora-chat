@@ -21,28 +21,57 @@ import {
 let client: OpenAI | undefined;
 
 /**
- * Replit-managed OpenAI (Replit AI Integrations). Replit injects both variables
- * inside the Repl and its deployments; usage is billed to the Replit account.
- * There is deliberately no fallback to another provider or a personal key.
+ * Two providers, chosen by which credentials are present:
+ * - Replit-managed OpenAI (Replit AI Integrations): injected inside the Repl and
+ *   its deployments, billed to the Replit account. Used first when present.
+ * - OpenRouter (OpenAI-compatible): for running locally, via OPENROUTER_API_KEY.
  */
-const AI_PROVIDER = "replit-ai-integrations/openai";
+function provider() {
+	const replitBase = process.env.AI_INTEGRATIONS_OPENAI_BASE_URL;
+	const replitKey = process.env.AI_INTEGRATIONS_OPENAI_API_KEY;
+	if (replitBase && replitKey) {
+		return {
+			name: "replit-ai-integrations/openai",
+			apiKey: replitKey,
+			baseURL: replitBase,
+			defaultModel: "gpt-5-mini",
+			headers: undefined,
+		};
+	}
+	const openRouterKey = process.env.OPENROUTER_API_KEY;
+	if (openRouterKey) {
+		return {
+			name: "openrouter",
+			apiKey: openRouterKey,
+			baseURL: process.env.AI_BASE_URL || "https://openrouter.ai/api/v1",
+			defaultModel: "openai/gpt-5-mini",
+			headers: { "X-Title": "Quora Chat" },
+		};
+	}
+	return undefined;
+}
 
 function getClient() {
 	if (client) return client;
-const baseURL = process.env.AI_INTEGRATIONS_OPENAI_BASE_URL;
-const apiKey = process.env.AI_INTEGRATIONS_OPENAI_API_KEY;
-if (!baseURL || !apiKey) {
-throw new Error(
-"Replit AI Integrations (OpenAI) is not configured: AI_INTEGRATIONS_OPENAI_BASE_URL and AI_INTEGRATIONS_OPENAI_API_KEY must be set.",
-);
+	const p = provider();
+	if (!p) {
+		throw new Error(
+			"No AI credentials. Set OPENROUTER_API_KEY in .env (local), or enable Replit AI Integrations (OpenAI) on Replit.",
+		);
 	}
-client = new OpenAI({ apiKey, baseURL });
+	client = new OpenAI({
+		apiKey: p.apiKey,
+		baseURL: p.baseURL,
+		defaultHeaders: p.headers,
+	});
 	return client;
 }
 
-// OpenAI model id. It must support strict structured outputs (json_schema) and
-// the reasoning_effort values used below ("minimal" | "low"); gpt-5-mini does.
-const model = () => process.env.AI_MODEL || "gpt-5-mini";
+// Model id. It must support strict structured outputs (json_schema) and the
+// reasoning_effort values used below ("minimal" | "low"). OpenRouter ids are
+// "provider/model"; the Replit-managed OpenAI ids are plain ("gpt-5-mini").
+const model = () =>
+	process.env.AI_MODEL || provider()?.defaultModel || "gpt-5-mini";
 /** What the AI thinking log records as the model; replay mode says so. */
 export const aiModelName = () => (isReplay() ? REPLAY_MODEL : model());
 export const aiMode = () => (isReplay() ? "replay" : "live");
@@ -50,9 +79,9 @@ export const aiMode = () => (isReplay() ? "replay" : "live");
 // One line per process (web server and worker) naming the provider and model.
 // Never log credentials or message contents.
 console.info(
-isReplay()
-? `[ai] mode=replay model=${REPLAY_MODEL}`
-: `[ai] mode=live provider=${AI_PROVIDER} model=${model()} configured=${Boolean(process.env.AI_INTEGRATIONS_OPENAI_BASE_URL && process.env.AI_INTEGRATIONS_OPENAI_API_KEY)}`,
+	isReplay()
+		? `[ai] mode=replay model=${REPLAY_MODEL}`
+		: `[ai] mode=live provider=${provider()?.name ?? "none"} model=${model()} configured=${Boolean(provider())}`,
 );
 
 /** One chat call that must return JSON matching `jsonSchema`, checked again with zod. */

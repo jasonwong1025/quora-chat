@@ -8,7 +8,12 @@ const dev = process.argv.includes("--dev");
 const web = dev
 	? spawn(
 			process.execPath,
-["node_modules/vite/bin/vite.js", "dev", "--port", process.env.PORT || "5000"],
+			[
+				"node_modules/vite/bin/vite.js",
+				"dev",
+				"--port",
+				process.env.PORT || (process.env.REPL_ID ? "5000" : "3000"),
+			],
 			{ stdio: "inherit" },
 		)
 	: spawn(
