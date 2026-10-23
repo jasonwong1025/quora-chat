@@ -6,6 +6,7 @@ import {
 	formatDay,
 	stockPhrase,
 } from "#/lib/availability";
+import { isExplicitOrderCancellation } from "#/lib/cancellation";
 import type { Passage } from "#/lib/knowledge";
 import {
 	isReplay,
@@ -191,7 +192,10 @@ export type ReadInput = {
 	};
 	openFollowUps: { id: string; question: string }[];
 	stage: "gathering" | "confirming";
+	/** The latest quotation being discussed (sent unsigned, or a signed project eligible for revision). */
 	sentQuote: { number: string; lines: string[]; signed: boolean } | null;
+	/** The agreement currently in force, even when signed stock orders cannot be revised. */
+	activeSignedQuote: { number: string; lines: string[] } | null;
 	history: ChatTurn[];
 	latestHasAttachment: boolean;
 	/** The language we replied in last time; kept when the latest message has no clear language. */
@@ -233,6 +237,7 @@ const readSchema = z.object({
 			"later",
 			"price_concern",
 			"not_interested",
+			"cancel_signed_order",
 			"question",
 		]),
 		resumeOn: z.string().nullable(),
@@ -274,7 +279,14 @@ const readJsonSchema = obj({
 	quoteResponse: obj({
 		intent: {
 			type: "string",
-			enum: ["none", "later", "price_concern", "not_interested", "question"],
+			enum: [
+				"none",
+				"later",
+				"price_concern",
+				"not_interested",
+				"cancel_signed_order",
+				"question",
+			],
 		},
 		resumeOn: strOrNull,
 		lostReason: {
@@ -302,7 +314,8 @@ ${JSON.stringify(input.brief)}
 
 Open follow-up questions waiting for an answer (JSON): ${JSON.stringify(input.openFollowUps)}
 Stage: ${input.stage}${input.stage === "confirming" ? " (we sent the customer a summary and asked them to confirm it)" : ""}
-${input.sentQuote ? `A quotation was already ${input.sentQuote.signed ? "SIGNED" : "sent"} by this customer: ${input.sentQuote.number}: ${input.sentQuote.lines.join("; ")}` : "No quotation has been sent yet."}
+${input.sentQuote ? `A quotation was already ${input.sentQuote.signed ? "SIGNED" : "sent"} by this customer: ${input.sentQuote.number}: ${input.sentQuote.lines.join("; ")}` : "No quotation is currently waiting for this customer's response."}
+${input.activeSignedQuote ? `The customer's ACTIVE SIGNED ORDER is ${input.activeSignedQuote.number}: ${input.activeSignedQuote.lines.join("; ")}` : "There is no active signed order."}
 The latest customer message ${input.latestHasAttachment ? "HAS a file attached" : "has no attachment"}.
 
 Rules:
@@ -316,12 +329,13 @@ Rules:
 - followUpAnswers: answers to the open follow-up questions, if the customer gave them.
 - followUp: only if an answer the customer just gave to one of the questions above is too vague or contradictory to quote on (e.g. "a few users", clashing dates): aboutKey = that question's key (or "quantity"), question = ONE short question to clear it up. Otherwise null (this is the usual case). Never ask technical or implementation questions (APIs, databases, file formats, hosting setup): our team works those out. Never use it for something a preset question already covers, or to ask for files.
 - confirmation: only at stage "confirming": "confirmed" if they agree the summary is right (ok / yes / betul / 对 / can / go ahead), including when they repeat a detail that already matches the summary ("Ya, 2000" when the summary says 2000). "changed" only if they correct or add something that differs from the summary. Otherwise "none".
-- wantsChange: true only if a quotation was already sent or signed and the latest customer message requests changed requirements, scope, quantities or deadlines for that work. An answer clarifying an existing requirement or a question about agreed work is not a scope change. Never silently merge an additional deliverable into a signed agreement. A pure price concern or refusal is not a scope change; if the same message also changes deliverables, keep wantsChange=true.
-- quoteResponse: only when a quotation was already sent and is waiting for their signature, how the latest message responds to it (otherwise intent "none"):
-  - "later": they need more time / must ask their boss or partner. resumeOn = the date they'll be ready as YYYY-MM-DD (today is ${input.today}; "next week" = 7 days later, "end of month" = last day of the month), or null if they gave no time.
-  - "price_concern": too expensive, asking for a discount or a better price.
-  - "not_interested": they decided not to go ahead. lostReason = price / timing / competitor (went elsewhere) / not_needed / other.
-  - "question": a question about the quotation or the work.
+- wantsChange: true only if a quotation was already sent or signed and the latest customer message requests changed requirements, scope, quantities or deadlines for that work. An answer clarifying an existing requirement or a question about agreed work is not a scope change. Never silently merge an additional deliverable into a signed agreement. A pure price concern, refusal, or cancellation is not a scope change; if the same message also changes deliverables, keep wantsChange=true unless they explicitly cancel the whole signed order.
+- quoteResponse: classify how the latest message responds to a sent quotation or active signed order:
+  - "cancel_signed_order": ONLY when there is an ACTIVE SIGNED ORDER and the latest message is an explicit, unconditional decision to cancel/terminate the whole signed order (for example "cancel my order", "we have decided to cancel", "batalkan pesanan", "取消订单"). This action is destructive. Never use it for a question ("can I cancel?", "what if I cancel?"), a hypothetical/conditional statement, uncertainty, postponement, a price concern, a requested change, removing one line item, or declining only a proposed unsigned revision while keeping the signed agreement.
+  - "later": an unsigned quotation customer needs more time / must ask their boss or partner. resumeOn = the date they'll be ready as YYYY-MM-DD (today is ${input.today}; "next week" = 7 days later, "end of month" = last day of the month), or null if they gave no time.
+  - "price_concern": an unsigned quotation customer says it is too expensive or asks for a discount or better price.
+  - "not_interested": an unsigned quotation customer decided not to go ahead. lostReason = price / timing / competitor (went elsewhere) / not_needed / other.
+  - "question": a question about the quotation, signed order, cancellation policy, or the work.
   - "none": anything else, including asking to change the quote (that's wantsChange).
   note = a few words on their reason, or null.
 - customerQuestion: if they asked us something that is not a requirement (opening hours, location, turnaround…), the question in short English. Otherwise null.
@@ -1145,29 +1159,35 @@ export function readRelayAnswer(input: {
 	reply: string;
 	hasAttachment: boolean;
 }) {
-	// Replay: any reply to a relayed question counts as its answer.
-	if (isReplay())
+	// Replay still keeps an explicit order cancellation in the main workflow.
+	if (isReplay()) {
+		const cancellation = isExplicitOrderCancellation(input.reply);
 		return Promise.resolve({
-			answers: Boolean(input.reply.trim()),
-			answer: input.reply.trim() || null,
+			answers: !cancellation && Boolean(input.reply.trim()),
+			answer: !cancellation && input.reply.trim() ? input.reply.trim() : null,
 			changesScope: false,
+			cancelsOrder: cancellation,
 		});
+	}
 	return structured(
 		"relay_answer",
 		obj({
 			answers: { type: "boolean" },
 			answer: strOrNull,
 			changesScope: { type: "boolean" },
+			cancelsOrder: { type: "boolean" },
 		}),
 		z.object({
 			answers: z.boolean(),
 			answer: z.string().nullable(),
 			changesScope: z.boolean(),
+			cancelsOrder: z.boolean(),
 		}),
 		`We asked a customer a question on WhatsApp on behalf of our team. Decide whether their reply answers it.
 - answers: true if the reply gives the information asked (even partly, or "don't know"), false if it's about something else.
 - answer: if answers=true, the answer as a short English note for our team (keep exact details; mention an attached file if there is one). Else null.
-- changesScope: true if the reply also requests additional deliverables or a change to agreed scope, quantities or deadlines. This must go through the quotation change workflow rather than silently being treated as a clarification.`,
+- changesScope: true if the reply also requests additional deliverables or a change to agreed scope, quantities or deadlines. This must go through the quotation change workflow rather than silently being treated as a clarification.
+- cancelsOrder: true only when the reply explicitly and unconditionally cancels or terminates the whole signed order. A question, hypothetical, postponement, concern, or scope change is false. When true, answers must be false and answer null so the cancellation workflow handles it.`,
 		`Our team's question: ${input.question}\nMessage we sent: ${input.sentMessage}\nCustomer's reply: ${input.reply}${input.hasAttachment ? " [with a file attached]" : ""}`,
 		"minimal",
 	);

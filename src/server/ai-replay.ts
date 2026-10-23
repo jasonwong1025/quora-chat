@@ -16,6 +16,7 @@
 import { flagshipScenario, scriptKey } from "#/data/demo-scenario";
 import type { Language } from "#/db/schema";
 import { type AvailabilityIssue, formatDay } from "#/lib/availability";
+import { isExplicitOrderCancellation } from "#/lib/cancellation";
 import type { Passage } from "#/lib/knowledge";
 import { searchKnowledge } from "#/lib/knowledge";
 import type {
@@ -81,6 +82,21 @@ export function replayReadTurn(input: ReadInput): Reading {
 	const latest = [...input.history]
 		.reverse()
 		.find((m) => m.sender === "customer");
+	if (
+		input.activeSignedQuote &&
+		isExplicitOrderCancellation(latest?.body ?? "")
+	)
+		return reading(input, {
+			summary: `Customer cancelled signed order ${input.activeSignedQuote.number}`,
+			items: [],
+			quoteResponse: {
+				intent: "cancel_signed_order",
+				resumeOn: null,
+				lostReason: null,
+				note: "Customer explicitly asked to cancel the signed order",
+			},
+			reasoning: ["Explicit cancellation of the active signed order."],
+		});
 	const step = flagshipScenario.steps.findIndex(
 		(s) => scriptKey(s.say) === scriptKey(latest?.body ?? ""),
 	);

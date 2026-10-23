@@ -72,6 +72,11 @@ import {
 } from "./ai";
 import { issueInvoices } from "./billing";
 import {
+	CancellationNeedsReviewError,
+	cancelSignedOrder,
+	flagCancellationForReview,
+} from "./cancellation";
+import {
 	onCustomerReplyToQuote,
 	onQuoteClosed,
 	onQuoteOpened,
@@ -188,13 +193,33 @@ async function findSentQuote(conversationId: string) {
 		if (
 			(job &&
 				(job.kind !== "project" ||
-					["completed", "closed"].includes(job.status))) ||
+					["completed", "closed", "cancelled"].includes(job.status))) ||
 			!products.some((p) => p.pricingMode === "custom") ||
 			products.some((p) => p.type === "stock")
 		)
 			return null;
 	}
 	return { request, quote };
+}
+
+/** The signed agreement still in force, including stock orders that cannot be revised. */
+async function findActiveSignedQuote(conversationId: string) {
+	const [found] = await getDb()
+		.select({ quote: schema.quotes, request: schema.quoteRequests })
+		.from(schema.quotes)
+		.innerJoin(
+			schema.quoteRequests,
+			eq(schema.quoteRequests.id, schema.quotes.requestId),
+		)
+		.where(
+			and(
+				eq(schema.quoteRequests.conversationId, conversationId),
+				eq(schema.quotes.status, "accepted"),
+			),
+		)
+		.orderBy(desc(schema.quotes.signedAt), desc(schema.quotes.createdAt))
+		.limit(1);
+	return found ?? null;
 }
 
 /** Messages that belong to this request: since the previous request closed. */
@@ -1445,7 +1470,15 @@ async function* customerTurn(
 	}
 
 	const sent = open ? null : await findSentQuote(conversation.id);
-	const rows = await historyFor(conversation.id, open ?? sent?.request ?? null);
+	const activeSigned =
+		sent?.quote.status === "accepted"
+			? sent
+			: await findActiveSignedQuote(conversation.id);
+	const quoteContext = sent ?? activeSigned;
+	const rows = await historyFor(
+		conversation.id,
+		open ?? quoteContext?.request ?? null,
+	);
 	const history = toTurns(rows);
 	await run.add({
 		kind: "read",
@@ -1466,6 +1499,7 @@ async function* customerTurn(
 	const previousLanguage =
 		open?.brief.language ??
 		sent?.request.brief.language ??
+		activeSigned?.request.brief.language ??
 		(
 			await db.query.quoteRequests.findFirst({
 				where: eq(schema.quoteRequests.conversationId, conversation.id),
@@ -1509,11 +1543,20 @@ async function* customerTurn(
 				.filter((f) => !followUpResolved(f))
 				.map((f) => ({ id: f.id, question: f.question })),
 			stage: open?.status === "confirming" ? "confirming" : "gathering",
-			sentQuote: sent
+			sentQuote:
+				sent?.quote.status === "approved"
+					? {
+							number: sent.quote.number,
+							signed: false,
+							lines: sent.quote.lineItems.map(
+								(l) => `${l.description} × ${l.quantity} ${l.unit}`,
+							),
+						}
+					: null,
+			activeSignedQuote: activeSigned
 				? {
-						number: sent.quote.number,
-						signed: sent.quote.status === "accepted",
-						lines: sent.quote.lineItems.map(
+						number: activeSigned.quote.number,
+						lines: activeSigned.quote.lineItems.map(
 							(l) => `${l.description} × ${l.quantity} ${l.unit}`,
 						),
 					}
@@ -1565,6 +1608,100 @@ async function* customerTurn(
 		language: reading.language,
 		itemCount: reading.items.filter((i) => !i.removed).length,
 	};
+
+	// A definite cancellation of an active signed order takes priority over
+	// revisions, relayed questions and new enquiries. Questions or hypotheticals
+	// are deliberately classified as "question" and never enter this branch.
+	if (activeSigned && reading.quoteResponse.intent === "cancel_signed_order") {
+		const requestId = open?.id ?? activeSigned.request.id;
+		let outcome: Awaited<ReturnType<typeof cancelSignedOrder>> | null = null;
+		let reviewReason: string | null = null;
+		try {
+			outcome = await cancelSignedOrder({
+				quoteId: activeSigned.quote.id,
+				actor: conversation.customerName,
+				note: reading.quoteResponse.note,
+				messageId: incoming.id,
+				processedRequestId: requestId,
+			});
+		} catch (error) {
+			if (!(error instanceof CancellationNeedsReviewError)) throw error;
+			reviewReason = error.message;
+			await db
+				.update(schema.quoteRequests)
+				.set({ processedMessageId: incoming.id, updatedAt: new Date() })
+				.where(eq(schema.quoteRequests.id, requestId));
+			await flagCancellationForReview({
+				quoteId: activeSigned.quote.id,
+				actor: conversation.customerName,
+				reason: reviewReason,
+			});
+		}
+
+		await run.setRequest(requestId);
+		await run.add({
+			kind: "understand",
+			title: `Customer decided to cancel ${activeSigned.quote.number}`,
+			detail: reading.reasoning,
+		});
+		await run.add({
+			kind: "decide",
+			title: outcome
+				? `${activeSigned.quote.number} cancelled automatically`
+				: "Cancellation sent to staff for review",
+			detail: outcome
+				? [
+						outcome.released.length
+							? `Released ${outcome.released.map((stock) => `${stock.quantity} ${stock.unit} ${stock.name}`).join(", ")}`
+							: "No stock reservation needed release",
+						`${outcome.voidedInvoices} unpaid invoice${outcome.voidedInvoices === 1 ? "" : "s"} voided`,
+						...(outcome.paidInvoices
+							? ["Paid invoice retained for staff refund review"]
+							: []),
+					]
+				: [reviewReason ?? "The order needs staff review"],
+		});
+
+		const instruction = outcome
+			? `The customer's signed order ${outcome.quoteNumber} has now been cancelled. Confirm this clearly. ${outcome.released.length ? "Tell them the reserved stock has been released." : "There was no reserved stock to release."} ${outcome.voidedInvoices ? "Tell them any unpaid invoice was cancelled." : ""} ${outcome.paidInvoices ? "Say the team will contact them separately about the payment already received; do not promise or assume a refund." : ""} Be brief, respectful, and do not ask them to reconsider.`
+			: `They asked to cancel their signed order, but it could not be completed automatically because ${reviewReason ?? "it needs staff review"}. Say you have sent it to the team for urgent review and they will confirm. Do not say the order is cancelled or that stock/payment was released.`;
+		const language = reading.language === "mixed" ? "en" : reading.language;
+		const fallback = outcome
+			? {
+					en: `Your signed order ${outcome.quoteNumber} has been cancelled as requested.${outcome.released.length ? " The reserved stock has been released." : ""}${outcome.paidInvoices ? " Our team will contact you separately about the payment already received." : ""}`,
+					ms: `Pesanan yang telah ditandatangani ${outcome.quoteNumber} telah dibatalkan seperti diminta.${outcome.released.length ? " Stok yang ditempah telah dilepaskan." : ""}${outcome.paidInvoices ? " Pasukan kami akan menghubungi anda berasingan tentang bayaran yang telah diterima." : ""}`,
+					zh: `已按您的要求取消已签署的订单 ${outcome.quoteNumber}。${outcome.released.length ? "预留库存已释放。" : ""}${outcome.paidInvoices ? "我们的团队会另行联系您处理已收到的款项。" : ""}`,
+				}[language]
+			: {
+					en: "I've sent your cancellation request to the team for urgent review. They'll confirm it with you shortly.",
+					ms: "Saya telah menghantar permintaan pembatalan anda kepada pasukan untuk semakan segera. Mereka akan mengesahkannya dengan anda tidak lama lagi.",
+					zh: "我已将您的取消请求提交给团队紧急审核，他们会尽快向您确认。",
+				}[language];
+		const reply =
+			(await writeReply({
+				business: catalog.business,
+				customerName: conversation.customerName,
+				language: reading.language,
+				plan: { stage: "note", instruction },
+				customerQuestion: null,
+				notOffered: [],
+				history,
+				firstReply: false,
+			}).catch(() => "")) || fallback;
+		yield { step: "staged", status: null, requestId };
+		await db.insert(schema.messages).values({
+			conversationId: conversation.id,
+			sender: "assistant",
+			body: reply,
+		});
+		await run.add({
+			kind: "reply",
+			title: `Confirmed the cancellation in ${languageLabel[reading.language]}`,
+		});
+		await run.finish("done");
+		yield { step: "replied", body: reply };
+		return;
+	}
 
 	// After a quote was sent, anything that isn't a change to it is a new enquiry:
 	// start a fresh brief with only the new items.
@@ -2272,7 +2409,9 @@ export async function decideQuote(input: {
 					baseline.quote.status !== "accepted" ||
 					(baseline.job &&
 						(baseline.job.kind !== "project" ||
-							["completed", "closed"].includes(baseline.job.status)))
+							["completed", "closed", "cancelled"].includes(
+								baseline.job.status,
+							)))
 				)
 					throw new Error(
 						"This signed agreement can no longer be revised as an active project",
@@ -2676,7 +2815,7 @@ export async function signQuote(input: {
 					.for("update");
 				if (
 					job.kind !== "project" ||
-					["completed", "closed"].includes(job.status)
+					["completed", "closed", "cancelled"].includes(job.status)
 				)
 					throw new Error("This project requires a separate change review");
 			}

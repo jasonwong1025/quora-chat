@@ -575,11 +575,16 @@ function QuoteDoc({ quote }: { quote: QuoteInfo }) {
 
 function SignButton({ quote }: { quote: QuoteInfo }) {
 	const signed = quote.status === "accepted";
+	const cancelled = quote.status === "cancelled";
 	return (
 		<div className="mt-0.5 flex rounded-lg bg-[var(--wa-in)]">
 			{signed ? (
 				<span className="flex flex-1 items-center justify-center gap-2 py-2.5 text-sm text-[var(--wa-muted)]">
 					<Check className="size-4" /> Signed
+				</span>
+			) : cancelled ? (
+				<span className="flex flex-1 items-center justify-center gap-2 py-2.5 text-sm text-[var(--wa-muted)]">
+					<X className="size-4" /> Order cancelled
 				</span>
 			) : (
 				<a

@@ -14,7 +14,7 @@ export async function runNextTask() {
 				where: eq(schema.quotes.id, task.entityId),
 			});
 			if (!quote) throw new Error("Accepted quotation not found");
-			if (quote.status === "superseded") {
+			if (quote.status !== "accepted") {
 				await getDb().transaction((db) => finishTask(db, claim));
 				return true;
 			}

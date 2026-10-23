@@ -41,7 +41,10 @@ export async function resetDemoActivity(businessId: string) {
 				.select()
 				.from(schema.stockReservations)
 				.where(inArray(schema.stockReservations.quoteId, quoteIds));
-			for (const r of reservations)
+			for (const r of reservations) {
+				// A cancelled order already returned its reservation; resetting demo
+				// activity must not subtract that stock a second time.
+				if (r.releasedAt) continue;
 				await db
 					.update(schema.products)
 					.set(
@@ -54,6 +57,7 @@ export async function resetDemoActivity(businessId: string) {
 								},
 					)
 					.where(eq(schema.products.id, r.productId));
+			}
 		}
 		const ids = [...quoteIds, ...jobIds];
 		if (ids.length)

@@ -40,6 +40,10 @@ const filters = {
 		label: "Lost",
 		test: (r: RequestRow) => r.quote?.status === "lost",
 	},
+	cancelled: {
+		label: "Cancelled",
+		test: (r: RequestRow) => r.quote?.status === "cancelled",
+	},
 	rejected: {
 		label: "Rejected",
 		test: (r: RequestRow) => r.status === "rejected",

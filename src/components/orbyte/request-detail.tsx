@@ -83,7 +83,9 @@ export function RequestDetail(props: {
 					{/* Once signed, say so rather than the request's "approved" stage. */}
 					<StatusBadge
 						status={
-							quote?.status === "accepted" || quote?.status === "lost"
+							quote?.status === "accepted" ||
+							quote?.status === "lost" ||
+							quote?.status === "cancelled"
 								? quoteBadge(quote.status)
 								: request.status
 						}
@@ -207,6 +209,25 @@ export function RequestDetail(props: {
 									<span className="text-muted-foreground">
 										Creating the job…
 									</span>
+								)}
+							</p>
+						)}
+						{quote.status === "cancelled" && (
+							<p className="flex flex-wrap items-center gap-2 bg-status-rejected/10 px-3 py-2 text-sm">
+								<AlertTriangle className="size-4 text-status-rejected" />
+								Cancelled by {quote.cancelledBy ?? "the customer"}
+								{quote.cancelledAt
+									? ` on ${quote.cancelledAt.toLocaleString("en-MY")}`
+									: ""}
+								{quote.cancellationNote ? ` · ${quote.cancellationNote}` : ""}
+								{request.job && (
+									<Link
+										to="/orbyte/$businessId/work/$jobId"
+										params={{ businessId: business.id, jobId: request.job.id }}
+										className="font-medium text-primary hover:underline"
+									>
+										Job {request.job.number} →
+									</Link>
 								)}
 							</p>
 						)}

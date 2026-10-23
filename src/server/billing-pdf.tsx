@@ -118,7 +118,13 @@ export async function renderInvoicePdf(invoiceId: string) {
 					business={c.business}
 					title="INVOICE"
 					number={invoice.number}
-					status={invoice.status === "paid" ? "Paid" : "Payment pending"}
+					status={
+						invoice.status === "paid"
+							? "Paid"
+							: invoice.status === "void"
+								? "Cancelled"
+								: "Payment pending"
+					}
 				/>
 				<Parties
 					customer={c.conversation.customerName}

@@ -66,9 +66,19 @@ export async function startHandover(
 	claim?: TaskClaim,
 ) {
 	return getDb().transaction(async (db) => {
+		// Re-read under the quote lock: the worker may have loaded it just before
+		// the customer cancelled. Never create a job from that stale object.
+		const [currentQuote] = await db
+			.select({ id: schema.quotes.id, status: schema.quotes.status })
+			.from(schema.quotes)
+			.where(eq(schema.quotes.id, quote.id))
+			.for("update");
+		if (!currentQuote) throw new Error("Quotation not found");
+		if (currentQuote.status !== "accepted") {
+			if (claim) await finishTask(db, claim);
+			return null;
+		}
 		if (claim) await finishTask(db, claim);
-		if (quote.status !== "accepted")
-			throw new Error("Only a signed quotation can create a job");
 		await db
 			.select({ id: schema.businesses.id })
 			.from(schema.businesses)
@@ -93,7 +103,7 @@ export async function startHandover(
 		if (previousJob) {
 			if (
 				previousJob.kind !== "project" ||
-				["completed", "closed"].includes(previousJob.status)
+				["completed", "closed", "cancelled"].includes(previousJob.status)
 			)
 				throw new Error("This signed change needs a separate job review");
 			const [updated] = await db
@@ -392,7 +402,8 @@ export async function buildHandover(
 	const { job, context, quote } = await jobContext(jobId);
 	if (
 		(expectedQuoteId && job.quoteId !== expectedQuoteId) ||
-		quote.status === "superseded"
+		quote.status !== "accepted" ||
+		job.status === "cancelled"
 	) {
 		await getDb().transaction((db) => finishTask(db, claim));
 		return;
@@ -495,6 +506,8 @@ export async function prepareHandover(jobId: string) {
 			.from(schema.jobs)
 			.where(eq(schema.jobs.id, jobId));
 		if (!job) throw new Error("Job not found");
+		if (job.status === "cancelled")
+			throw new Error("A cancelled job cannot prepare a handover");
 		if (job.handover)
 			throw new Error("This job already has its agreed handover");
 		await enqueueTask(db, "prepare_handover", jobId, job.quoteId);
@@ -537,6 +550,8 @@ export async function updateJob(input: {
 			.where(eq(schema.jobs.id, input.jobId))
 			.for("update");
 		if (!job) throw new Error("Job not found");
+		if (job.status === "cancelled")
+			throw new Error("This job was cancelled by the customer");
 		const member = await loadStaff(input.staffId, job.businessId);
 		const currentQuote = await db.query.quotes.findFirst({
 			where: eq(schema.quotes.id, job.quoteId),
@@ -667,6 +682,7 @@ async function deliverStock(
 			and(
 				eq(schema.stockReservations.quoteId, job.quoteId),
 				sql`${schema.stockReservations.deliveredAt} IS NULL`,
+				sql`${schema.stockReservations.releasedAt} IS NULL`,
 			),
 		)
 		.orderBy(schema.stockReservations.productId)
@@ -720,6 +736,8 @@ export async function addTask(input: {
 		where: eq(schema.jobs.id, input.jobId),
 	});
 	if (!job) throw new Error("Job not found");
+	if (job.status === "cancelled")
+		throw new Error("Tasks cannot be added to a cancelled job");
 	const member = await loadStaff(input.staffId, job.businessId);
 	const [{ max }] = await db
 		.select({
@@ -764,6 +782,11 @@ export async function updateTask(input: {
 			.from(schema.jobs)
 			.where(eq(schema.jobs.id, task.jobId))
 			.for("update");
+		if (!job) throw new Error("Job not found");
+		if (job.status === "cancelled")
+			throw new Error(
+				"Tasks cannot change after the customer cancelled this job",
+			);
 		const currentQuote = await db.query.quotes.findFirst({
 			where: eq(schema.quotes.id, job.quoteId),
 		});
@@ -1215,6 +1238,8 @@ export async function requestCustomerAnswer(input: {
 	const { job, context, business, conversation, messages } = await jobContext(
 		input.jobId,
 	);
+	if (job.status === "cancelled")
+		throw new Error("The customer already cancelled this job");
 	const member = await loadStaff(input.staffId, job.businessId);
 	const question = input.question.trim();
 	if (!question) throw new Error("Type the question");
@@ -1396,7 +1421,14 @@ export async function matchRelayAnswer(input: {
 		reply: input.message.body,
 		hasAttachment: Boolean(input.message.attachment),
 	}).catch(() => null);
-	if (!result?.answers || !result.answer || result.changesScope) return null;
+	if (
+		!result ||
+		result.cancelsOrder ||
+		!result.answers ||
+		!result.answer ||
+		result.changesScope
+	)
+		return null;
 
 	const [row] = await db
 		.update(schema.relays)

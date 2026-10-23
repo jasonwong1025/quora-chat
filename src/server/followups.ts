@@ -618,7 +618,13 @@ export const onQuoteClosed = (quoteId: string, db?: Database) =>
 export async function onCustomerReplyToQuote(input: {
 	quoteId: string;
 	response: {
-		intent: "none" | "later" | "price_concern" | "not_interested" | "question";
+		intent:
+			| "none"
+			| "later"
+			| "price_concern"
+			| "not_interested"
+			| "cancel_signed_order"
+			| "question";
 		resumeOn: string | null;
 		lostReason:
 			| "price"

@@ -73,6 +73,12 @@ export function BillingTab({ jobId }: { jobId: string }) {
 
 	return (
 		<div className="mx-auto max-w-4xl space-y-5">
+			{b.cancelled && (
+				<div className="border border-status-rejected/30 bg-status-rejected/10 px-4 py-3 text-sm">
+					This order is cancelled. Nothing further is due; paid amounts remain
+					recorded for refund review.
+				</div>
+			)}
 			<div className="grid grid-cols-3 gap-px border bg-border">
 				{[
 					["Quotation", formatMYR(b.totalSen), b.quoteNumber],
@@ -84,7 +90,11 @@ export function BillingTab({ jobId }: { jobId: string }) {
 					[
 						"Balance",
 						formatMYR(b.balanceSen),
-						b.balanceSen <= 0 ? "Fully paid" : "Outstanding",
+						b.cancelled
+							? "Nothing further due"
+							: b.balanceSen <= 0
+								? "Fully paid"
+								: "Outstanding",
 					],
 				].map(([label, value, hint]) => (
 					<div key={label} className="bg-card px-4 py-3">
@@ -106,6 +116,7 @@ export function BillingTab({ jobId }: { jobId: string }) {
 						<InstalmentRow
 							key={p.index}
 							line={p}
+							cancelled={b.cancelled}
 							staffId={me?.id}
 							onDone={refresh}
 						/>
@@ -121,7 +132,8 @@ export function BillingTab({ jobId }: { jobId: string }) {
 					<Button
 						size="sm"
 						variant="ghost"
-						disabled={!me || statement.isPending}
+						disabled={!me || statement.isPending || b.cancelled}
+						title={b.cancelled ? "The order is cancelled" : undefined}
 						onClick={() =>
 							me &&
 							statement
@@ -169,6 +181,7 @@ export function BillingTab({ jobId }: { jobId: string }) {
 
 function InstalmentRow(props: {
 	line: Line;
+	cancelled: boolean;
 	staffId: string | undefined;
 	onDone: () => void;
 }) {
@@ -211,10 +224,14 @@ function InstalmentRow(props: {
 					</p>
 					<p className="text-xs text-muted-foreground">
 						{!inv
-							? "Not invoiced yet"
+							? props.cancelled
+								? "Not invoiced · no longer due"
+								: "Not invoiced yet"
 							: inv.status === "paid"
 								? `${inv.number} · paid ${inv.paidAt ? day(inv.paidAt) : ""}`
-								: `${inv.number} · sent ${day(inv.issuedAt)} · due ${day(inv.dueAt)}`}
+								: inv.status === "void"
+									? `${inv.number} · cancelled with the order`
+									: `${inv.number} · sent ${day(inv.issuedAt)} · due ${day(inv.dueAt)}`}
 					</p>
 				</div>
 				<p className="text-sm font-semibold tabular-nums">
@@ -230,15 +247,21 @@ function InstalmentRow(props: {
 							(overdue
 								? "bg-status-rejected/15 text-status-rejected"
 								: "bg-status-draft/10 text-status-draft"),
+						inv?.status === "void" &&
+							"bg-status-rejected/10 text-status-rejected",
 					)}
 				>
 					{!inv
-						? "Scheduled"
+						? props.cancelled
+							? "Cancelled"
+							: "Scheduled"
 						: inv.status === "paid"
 							? "Paid"
-							: overdue
-								? "Overdue"
-								: "Awaiting payment"}
+							: inv.status === "void"
+								? "Cancelled"
+								: overdue
+									? "Overdue"
+									: "Awaiting payment"}
 				</span>
 			</div>
 

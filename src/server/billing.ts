@@ -190,6 +190,14 @@ export async function issueInvoices(quoteId: string, event: BillingEvent) {
 	if (!due.length) return [];
 
 	const created = await db.transaction(async (tx) => {
+		// Cancellation and invoicing serialize on the quote. A trigger that loaded
+		// an accepted quote just before cancellation must not send a late invoice.
+		const [currentQuote] = await tx
+			.select({ status: schema.quotes.status })
+			.from(schema.quotes)
+			.where(eq(schema.quotes.id, quote.id))
+			.for("update");
+		if (currentQuote?.status !== "accepted") return [];
 		await lockBusiness(tx, business.id);
 		const existing = await tx
 			.select({ instalment: schema.invoices.instalment })
@@ -490,6 +498,8 @@ export async function sendStatement(jobId: string) {
 	if (!job) return;
 	const ctx = await loadQuote(db, job.quoteId);
 	if (!ctx) return;
+	if (ctx.quote.status === "cancelled")
+		throw new Error("A statement cannot be sent for a cancelled order");
 	const s = await statementFor(job.quoteId);
 	await db.insert(schema.messages).values({
 		conversationId: ctx.conversation.id,
@@ -543,7 +553,10 @@ export async function statementFor(quoteId: string) {
 		invoices,
 		payments,
 		paidSen,
-		balanceSen: ctx.quote.totalSen - paidSen,
+		// Voided and not-yet-issued instalments are no longer due after cancellation.
+		// Paid amounts stay visible for a separate refund decision.
+		balanceSen:
+			ctx.quote.status === "cancelled" ? 0 : ctx.quote.totalSen - paidSen,
 	};
 }
 

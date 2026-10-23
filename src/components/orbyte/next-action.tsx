@@ -70,6 +70,13 @@ export function nextAction(
 					.filter(Boolean)
 					.join(": "),
 			};
+		if (quote?.status === "cancelled")
+			return {
+				turn: "done",
+				tone: "done",
+				title: "Cancelled by customer",
+				detail: quote.cancellationNote ?? "Reserved stock released",
+			};
 		return {
 			turn: "customer",
 			tone: "waiting",

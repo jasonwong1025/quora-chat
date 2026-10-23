@@ -7,7 +7,7 @@ import {
 	MessageCircleQuestion,
 } from "lucide-react";
 import { useState } from "react";
-import { KindChip } from "#/components/orbyte/job-bits";
+import { JobStatusChip, KindChip } from "#/components/orbyte/job-bits";
 import { PageHeader, useWorkspace } from "#/components/orbyte/workspace";
 import { ago, avatarHue, initials } from "#/lib/time";
 import type { JobRow } from "#/lib/types";
@@ -22,7 +22,11 @@ const columns = [
 	{ key: "upcoming", label: "Upcoming", match: ["preparing", "upcoming"] },
 	{ key: "active", label: "Active", match: ["active"] },
 	{ key: "completed", label: "Completed", match: ["completed"] },
-	{ key: "closed", label: "Closed", match: ["closed"] },
+	{
+		key: "closed",
+		label: "Closed / cancelled",
+		match: ["closed", "cancelled"],
+	},
 ] as const;
 
 function Work() {
@@ -186,9 +190,13 @@ function JobCard({ job }: { job: JobRow }) {
 		>
 			<div className="flex items-center justify-between gap-2">
 				<KindChip kind={job.kind} />
-				<span className="font-mono text-[11px] text-muted-foreground">
-					{job.number}
-				</span>
+				{job.status === "cancelled" ? (
+					<JobStatusChip status="cancelled" />
+				) : (
+					<span className="font-mono text-[11px] text-muted-foreground">
+						{job.number}
+					</span>
+				)}
 			</div>
 			<p className="mt-1.5 line-clamp-2 text-sm font-medium">{job.title}</p>
 			<p className="text-xs text-muted-foreground">{job.clientName}</p>

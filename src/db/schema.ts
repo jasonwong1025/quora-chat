@@ -442,6 +442,7 @@ export const quoteStatus = pgEnum("quote_status", [
 	"accepted", // signed by the customer
 	"superseded", // replaced by a newer revision
 	"lost", // the customer said no, or it expired unsigned
+	"cancelled", // a signed order the customer explicitly cancelled
 ]);
 
 export const lostReasons = [
@@ -492,6 +493,10 @@ export const quotes = pgTable("quotes", {
 	lostReason: text("lost_reason").$type<LostReason>(),
 	lostNote: text("lost_note"),
 	lostAt: timestamp("lost_at", { withTimezone: true }),
+	// Signed-order cancellation: who requested it and when it took effect.
+	cancelledAt: timestamp("cancelled_at", { withTimezone: true }),
+	cancelledBy: text("cancelled_by"),
+	cancellationNote: text("cancellation_note"),
 	createdAt: createdAt(),
 });
 
@@ -623,6 +628,7 @@ export const jobStatus = pgEnum("job_status", [
 	"active",
 	"completed",
 	"closed",
+	"cancelled",
 ]);
 
 /** What the PIC needs to know, written by the AI from the chat, brief and quote. */
@@ -670,6 +676,7 @@ export const jobs = pgTable(
 			.defaultNow()
 			.notNull(),
 		completedAt: timestamp("completed_at", { withTimezone: true }),
+		cancelledAt: timestamp("cancelled_at", { withTimezone: true }),
 	},
 	(t) => [uniqueIndex("jobs_quote_unique").on(t.quoteId)],
 );
@@ -695,7 +702,7 @@ export const workflowTasks = pgTable("workflow_tasks", {
 		.notNull(),
 });
 
-/** A reservation belongs to one accepted quote, never to another job. */
+/** A reservation belongs to one signed quote; it is either delivered or released on cancellation. */
 export const stockReservations = pgTable(
 	"stock_reservations",
 	{
@@ -708,6 +715,7 @@ export const stockReservations = pgTable(
 			.references(() => products.id, { onDelete: "cascade" }),
 		quantity: integer("quantity").notNull(),
 		deliveredAt: timestamp("delivered_at", { withTimezone: true }),
+		releasedAt: timestamp("released_at", { withTimezone: true }),
 		createdAt: createdAt(),
 	},
 	(t) => [

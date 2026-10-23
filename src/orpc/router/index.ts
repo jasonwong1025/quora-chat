@@ -846,7 +846,12 @@ const esignList = os.input(businessInput).handler(async ({ input }) => {
 		.where(
 			and(
 				eq(schema.quotes.businessId, input.businessId),
-				inArray(schema.quotes.status, ["approved", "accepted", "superseded"]),
+				inArray(schema.quotes.status, [
+					"approved",
+					"accepted",
+					"superseded",
+					"cancelled",
+				]),
 			),
 		)
 		.orderBy(desc(schema.quotes.decidedAt));
@@ -865,6 +870,7 @@ const esignList = os.input(businessInput).handler(async ({ input }) => {
 							"esign.viewed",
 							"esign.signed",
 							"quote.accepted",
+							"quote.cancelled",
 						]),
 					),
 				)
@@ -1903,6 +1909,7 @@ const jobBilling = os
 			.orderBy(asc(schema.messages.createdAt));
 		return {
 			quoteNumber: st.quote.number,
+			cancelled: st.quote.status === "cancelled",
 			totalSen: st.quote.totalSen,
 			paidSen: st.paidSen,
 			balanceSen: st.balanceSen,

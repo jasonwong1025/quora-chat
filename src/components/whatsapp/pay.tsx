@@ -8,6 +8,7 @@ import {
 	ArrowLeft,
 	Check,
 	CheckCircle2,
+	CircleSlash,
 	Clock3,
 	CreditCard,
 	FileText,
@@ -35,6 +36,7 @@ const day = (d: Date) =>
 /** The invoice inside its chat bubble (like WhatsApp's order card). */
 export function InvoiceCard({ invoice }: { invoice: InvoiceInfo }) {
 	const paid = invoice.status === "paid";
+	const voided = invoice.status === "void";
 	return (
 		<div className="mb-1.5 min-w-64">
 			<p className="text-[11px] font-medium tracking-wider text-[var(--wa-muted)] uppercase">
@@ -50,12 +52,20 @@ export function InvoiceCard({ invoice }: { invoice: InvoiceInfo }) {
 					<dd
 						className={cn(
 							"flex items-center gap-1",
-							paid ? "text-[var(--wa-green)]" : "text-[var(--wa-muted)]",
+							paid
+								? "text-[var(--wa-green)]"
+								: voided
+									? "text-red-300"
+									: "text-[var(--wa-muted)]",
 						)}
 					>
 						{paid ? (
 							<>
 								<CheckCircle2 className="size-3.5" /> Paid
+							</>
+						) : voided ? (
+							<>
+								<CircleSlash className="size-3.5" /> Cancelled
 							</>
 						) : (
 							<>
@@ -64,7 +74,7 @@ export function InvoiceCard({ invoice }: { invoice: InvoiceInfo }) {
 						)}
 					</dd>
 				</div>
-				{!paid && (
+				{!paid && !voided && (
 					<div className="flex justify-between gap-4">
 						<dt className="text-[var(--wa-muted)]">Due</dt>
 						<dd>{day(invoice.dueAt)}</dd>
@@ -84,6 +94,7 @@ export function InvoiceCard({ invoice }: { invoice: InvoiceInfo }) {
 /** The button row under the card. */
 export function PayButton(props: { invoice: InvoiceInfo; onPay: () => void }) {
 	const paid = props.invoice.status === "paid";
+	const voided = props.invoice.status === "void";
 	return (
 		<div className="mt-0.5 flex rounded-lg bg-[var(--wa-in)]">
 			{paid ? (
@@ -95,6 +106,10 @@ export function PayButton(props: { invoice: InvoiceInfo; onPay: () => void }) {
 				>
 					<Check className="size-4" /> Paid · view invoice
 				</a>
+			) : voided ? (
+				<span className="flex flex-1 items-center justify-center gap-2 py-2.5 text-sm text-[var(--wa-muted)]">
+					<CircleSlash className="size-4" /> Invoice cancelled
+				</span>
 			) : (
 				<button
 					type="button"

@@ -127,9 +127,11 @@ export async function renderQuotePdf(input: {
 										? "Replaced by a newer revision"
 										: quote.status === "lost"
 											? "Lost - no longer open for signing"
-											: quote.status === "rejected"
-												? "Rejected"
-												: "DRAFT - not yet approved"}
+											: quote.status === "cancelled"
+												? "CANCELLED BY CUSTOMER"
+												: quote.status === "rejected"
+													? "Rejected"
+													: "DRAFT - not yet approved"}
 						</Text>
 					</View>
 				</View>

@@ -342,7 +342,9 @@ function Conversation({ row, onBack }: { row: InboxRow; onBack: () => void }) {
 											<FileText className="size-4" /> {quote.number}.pdf ·{" "}
 											{quote.status === "accepted"
 												? "Signed"
-												: "Sent for signature"}
+												: quote.status === "cancelled"
+													? "Cancelled"
+													: "Sent for signature"}
 										</a>
 									)}
 									{invoice && (
@@ -354,7 +356,11 @@ function Conversation({ row, onBack }: { row: InboxRow; onBack: () => void }) {
 										>
 											<Receipt className="size-4" /> {invoice.number} ·{" "}
 											{invoice.label} · {formatMYR(invoice.amountSen)} ·{" "}
-											{invoice.status === "paid" ? "Paid" : "Payment pending"}
+											{invoice.status === "paid"
+												? "Paid"
+												: invoice.status === "void"
+													? "Cancelled"
+													: "Payment pending"}
 										</a>
 									)}
 									{payment && (

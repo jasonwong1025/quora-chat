@@ -8,7 +8,11 @@ import { getDb, schema } from "../../src/db/index";
 import { quoteReviewToken } from "../../src/lib/agreements";
 import { emptyBrief } from "../../src/lib/intake";
 import type { Reading } from "../../src/server/ai";
-import { payInvoice } from "../../src/server/billing";
+import { payInvoice, statementFor } from "../../src/server/billing";
+import {
+	CancellationNeedsReviewError,
+	cancelSignedOrder,
+} from "../../src/server/cancellation";
 import { followUpAction, markLost } from "../../src/server/followups";
 import {
 	addJobMember,
@@ -48,6 +52,7 @@ let relayResult = {
 	answers: false,
 	answer: null as string | null,
 	changesScope: false,
+	cancelsOrder: false,
 };
 const server = createServer(async (req, res) => {
 	let body = "";
@@ -145,7 +150,12 @@ afterEach(async () => {
 	lastHandoverPrompt = "";
 	assistantPrompts = [];
 	replyPrompts = [];
-	relayResult = { answers: false, answer: null, changesScope: false };
+	relayResult = {
+		answers: false,
+		answer: null,
+		changesScope: false,
+		cancelsOrder: false,
+	};
 	await getDb().delete(schema.workflowTasks);
 	await getDb().delete(schema.businesses);
 });
@@ -589,6 +599,239 @@ test("duplicate signing reserves once and a restarted worker completes one hando
 	assert.equal(product?.stockReserved, 1);
 });
 
+test("an explicit customer cancellation releases the signed order's stock and stops billing", async () => {
+	const s = await scenario(true);
+	const db = getDb();
+	await db
+		.update(schema.businesses)
+		.set({
+			billing: {
+				schedule: [
+					{ label: "Deposit", percent: 50, when: "signed" },
+					{ label: "Second payment", percent: 50, when: "signed" },
+				],
+				dueDays: 7,
+				statement: true,
+				completionReport: true,
+			},
+		})
+		.where(eq(schema.businesses.id, s.businessId));
+	const quote = await approve(s);
+	await signQuote(signature(quote.id));
+	await runNextTask();
+	await runNextTask();
+	const [job] = await db.select().from(schema.jobs);
+	assert.ok(job);
+	const invoices = await db
+		.select()
+		.from(schema.invoices)
+		.orderBy(schema.invoices.instalment);
+	assert.equal(invoices.length, 2);
+	await payInvoice({ invoiceId: invoices[0].id, card: "Visa •1234" });
+
+	const relay = await requestCustomerAnswer({
+		jobId: job.id,
+		staffId: s.staff.id,
+		question: "What delivery time suits you?",
+	});
+	await reviewRelay({ relayId: relay.id, staffId: s.staff.id, action: "send" });
+	relayResult = {
+		answers: false,
+		answer: null,
+		changesScope: false,
+		cancelsOrder: true,
+	};
+	reading = {
+		...sentQuoteReply("cancel_signed_order"),
+		summary: "Customer decided to cancel the signed order",
+		quoteResponse: {
+			intent: "cancel_signed_order",
+			resumeOn: null,
+			lostReason: null,
+			note: "Plans changed",
+		},
+		reasoning: ["Explicit and unconditional cancellation"],
+	};
+	for await (const _ of handleCustomerMessage({
+		conversationId: s.conversation.id,
+		body: "We have decided to cancel the order.",
+	})) {
+		/* drain */
+	}
+
+	const cancelledQuote = await db.query.quotes.findFirst({
+		where: eq(schema.quotes.id, quote.id),
+	});
+	assert.equal(cancelledQuote?.status, "cancelled");
+	assert.equal(cancelledQuote?.cancelledBy, "Client");
+	assert.equal(cancelledQuote?.cancellationNote, "Plans changed");
+	assert.ok(cancelledQuote?.cancelledAt);
+	const product = await db.query.products.findFirst({
+		where: eq(schema.products.id, s.product.id),
+	});
+	assert.equal(product?.stockOnHand, 3);
+	assert.equal(product?.stockReserved, 0);
+	const [reservation] = await db.select().from(schema.stockReservations);
+	assert.ok(reservation.releasedAt);
+	assert.equal(reservation.deliveredAt, null);
+	assert.equal(
+		(await db.query.jobs.findFirst({ where: eq(schema.jobs.id, job.id) }))
+			?.status,
+		"cancelled",
+	);
+	assert.equal(
+		(await db.query.relays.findFirst({ where: eq(schema.relays.id, relay.id) }))
+			?.status,
+		"rejected",
+	);
+	const afterInvoices = await db
+		.select()
+		.from(schema.invoices)
+		.orderBy(schema.invoices.instalment);
+	assert.deepEqual(
+		afterInvoices.map((invoice) => invoice.status),
+		["paid", "void"],
+	);
+	const statement = await statementFor(quote.id);
+	assert.equal(statement.balanceSen, 0);
+	assert.equal(statement.paidSen, invoices[0].amountSen);
+	assert.equal(
+		(
+			await db
+				.select()
+				.from(schema.quoteFollowUps)
+				.where(eq(schema.quoteFollowUps.status, "scheduled"))
+		).length,
+		0,
+	);
+	assert.ok(
+		(
+			await db
+				.select()
+				.from(schema.activityEvents)
+				.where(eq(schema.activityEvents.type, "stock.released"))
+		).length,
+	);
+	assert.ok(
+		(await db.select().from(schema.notifications)).some((notification) =>
+			/refund separately/i.test(notification.body),
+		),
+	);
+	await assert.rejects(
+		updateJob({ jobId: job.id, staffId: s.staff.id, status: "completed" }),
+		/cancelled by the customer/,
+	);
+});
+
+test("concurrent signed-order cancellation releases once and prevents a queued handover", async () => {
+	const s = await scenario(true);
+	const quote = await approve(s);
+	await signQuote(signature(quote.id));
+	const results = await Promise.all([
+		cancelSignedOrder({ quoteId: quote.id, actor: "Client" }),
+		cancelSignedOrder({ quoteId: quote.id, actor: "Client" }),
+	]);
+	assert.deepEqual(results.map((result) => result.alreadyCancelled).sort(), [
+		false,
+		true,
+	]);
+	assert.equal(
+		(
+			await getDb().query.products.findFirst({
+				where: eq(schema.products.id, s.product.id),
+			})
+		)?.stockReserved,
+		0,
+	);
+	assert.ok(await runNextTask());
+	assert.equal((await getDb().select().from(schema.jobs)).length, 0);
+	assert.equal(
+		(await getDb().select().from(schema.workflowTasks))[0]?.status,
+		"done",
+	);
+});
+
+test("a cancellation question never releases a signed reservation", async () => {
+	const s = await scenario(true);
+	const quote = await approve(s);
+	await signQuote(signature(quote.id));
+	reading = {
+		...sentQuoteReply("question"),
+		customerQuestion: "What happens if I cancel?",
+		reasoning: ["A hypothetical question, not a cancellation decision"],
+	};
+	for await (const _ of handleCustomerMessage({
+		conversationId: s.conversation.id,
+		body: "What happens if I cancel the order?",
+	})) {
+		/* drain */
+	}
+	assert.equal(
+		(
+			await getDb().query.quotes.findFirst({
+				where: eq(schema.quotes.id, quote.id),
+			})
+		)?.status,
+		"accepted",
+	);
+	assert.equal(
+		(
+			await getDb().query.products.findFirst({
+				where: eq(schema.products.id, s.product.id),
+			})
+		)?.stockReserved,
+		1,
+	);
+	assert.equal(
+		(await getDb().select().from(schema.stockReservations))[0]?.releasedAt,
+		null,
+	);
+});
+
+test("delivered stock is never put back by automatic cancellation", async () => {
+	const s = await scenario(true);
+	const quote = await approve(s);
+	await signQuote(signature(quote.id));
+	await runNextTask();
+	await runNextTask();
+	const [job] = await getDb().select().from(schema.jobs);
+	await updateJob({
+		jobId: job.id,
+		staffId: s.staff.id,
+		status: "completed",
+	});
+	await assert.rejects(
+		cancelSignedOrder({ quoteId: quote.id, actor: "Client" }),
+		CancellationNeedsReviewError,
+	);
+	reading = sentQuoteReply("cancel_signed_order");
+	for await (const _ of handleCustomerMessage({
+		conversationId: s.conversation.id,
+		body: "Cancel the signed order.",
+	})) {
+		/* drain */
+	}
+	const current = await getDb().query.quotes.findFirst({
+		where: eq(schema.quotes.id, quote.id),
+	});
+	const product = await getDb().query.products.findFirst({
+		where: eq(schema.products.id, s.product.id),
+	});
+	assert.equal(current?.status, "accepted");
+	assert.equal(product?.stockOnHand, 2);
+	assert.equal(product?.stockReserved, 0);
+	assert.ok(
+		(
+			await getDb()
+				.select()
+				.from(schema.activityEvents)
+				.where(
+					eq(schema.activityEvents.type, "quote.cancellation_review_requested"),
+				)
+		).length,
+	);
+});
+
 test("failed model work retries without losing the signed job or duplicating tasks", async () => {
 	const s = await scenario();
 	const quote = await approve(s);
@@ -651,6 +894,7 @@ test("a signed project revision retains the job, protects completed tasks, and r
 		answers: true,
 		answer: "They also want 100 users",
 		changesScope: true,
+		cancelsOrder: false,
 	};
 	reading = {
 		language: "en",
@@ -1349,6 +1593,7 @@ test("end to end: enquiry → questions → recap → quote → sign → job →
 		answers: true,
 		answer: "Google sign-in",
 		changesScope: false,
+		cancelsOrder: false,
 	};
 	await say("Google sign-in please");
 	const answered = await db.query.relays.findFirst({

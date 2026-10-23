@@ -238,6 +238,14 @@ function JobHeader({ job, onAsk }: { job: JobDetail; onAsk: () => void }) {
 	};
 	return (
 		<header className="space-y-2 border-b bg-card px-4 py-3">
+			{job.status === "cancelled" && (
+				<output className="block rounded-md bg-status-rejected/10 p-3 text-sm">
+					The customer cancelled this signed order. Work has stopped,
+					undelivered reserved stock was released, and unpaid invoices were
+					voided. Check the Billing tab for any payment that needs refund
+					review.
+				</output>
+			)}
 			{job.agreementReviewRequired && (
 				<output className="block space-y-2 rounded-md bg-status-review/10 p-3 text-sm">
 					<p>
@@ -273,6 +281,7 @@ function JobHeader({ job, onAsk }: { job: JobDetail; onAsk: () => void }) {
 							{job.number}
 						</span>
 						{job.status === "preparing" && <JobStatusChip status="preparing" />}
+						{job.status === "cancelled" && <JobStatusChip status="cancelled" />}
 					</div>
 					<h1 className="mt-1 text-lg font-semibold">{job.title}</h1>
 					<p className="text-sm text-muted-foreground">
@@ -303,30 +312,32 @@ function JobHeader({ job, onAsk }: { job: JobDetail; onAsk: () => void }) {
 					</p>
 				</div>
 				<div className="flex flex-wrap items-end gap-2">
-					<Labeled label="Status">
-						<Select
-							value={job.status === "preparing" ? undefined : job.status}
-							disabled={job.status === "preparing" || update.isPending}
-							onValueChange={(v) => save({ status: v as "upcoming" })}
-						>
-							<SelectTrigger size="sm" className="w-36">
-								<SelectValue placeholder="Preparing…" />
-							</SelectTrigger>
-							<SelectContent position="popper">
-								{(["upcoming", "active", "completed", "closed"] as const).map(
-									(s) => (
-										<SelectItem key={s} value={s}>
-											{jobStatuses[s].label}
-										</SelectItem>
-									),
-								)}
-							</SelectContent>
-						</Select>
-					</Labeled>
+					{job.status !== "cancelled" && (
+						<Labeled label="Status">
+							<Select
+								value={job.status === "preparing" ? undefined : job.status}
+								disabled={job.status === "preparing" || update.isPending}
+								onValueChange={(v) => save({ status: v as "upcoming" })}
+							>
+								<SelectTrigger size="sm" className="w-36">
+									<SelectValue placeholder="Preparing…" />
+								</SelectTrigger>
+								<SelectContent position="popper">
+									{(["upcoming", "active", "completed", "closed"] as const).map(
+										(s) => (
+											<SelectItem key={s} value={s}>
+												{jobStatuses[s].label}
+											</SelectItem>
+										),
+									)}
+								</SelectContent>
+							</Select>
+						</Labeled>
+					)}
 					<Labeled label="Person in charge">
 						<Select
 							value={job.picId ?? "none"}
-							disabled={update.isPending}
+							disabled={update.isPending || job.status === "cancelled"}
 							onValueChange={(v) => save({ picId: v === "none" ? null : v })}
 						>
 							<SelectTrigger size="sm" className="w-48">
@@ -347,7 +358,8 @@ function JobHeader({ job, onAsk }: { job: JobDetail; onAsk: () => void }) {
 						variant="outline"
 						onClick={onAsk}
 						disabled={
-							!me?.canApprove && !job.members.some((m) => m.id === me?.id)
+							job.status === "cancelled" ||
+							(!me?.canApprove && !job.members.some((m) => m.id === me?.id))
 						}
 						title="Sales approve it before it reaches the customer"
 					>
@@ -417,6 +429,14 @@ function HandoverTab({
 	const { business } = useWorkspace();
 	const retry = useMutation(orpc.jobs.retryHandover.mutationOptions());
 	const h = job.handover;
+
+	if (job.status === "cancelled")
+		return (
+			<div className="rounded-xl border border-status-rejected/30 bg-card p-8 text-center text-sm text-muted-foreground">
+				This job was cancelled by the customer. Its existing handover and task
+				history are retained for audit only.
+			</div>
+		);
 
 	if (job.status === "preparing" || !h) {
 		const failed = job.handoverTask?.status === "failed";

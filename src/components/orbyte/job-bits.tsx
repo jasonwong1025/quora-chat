@@ -33,6 +33,10 @@ export const jobStatuses = {
 		className: "bg-status-approved/15 text-status-approved",
 	},
 	closed: { label: "Closed", className: "bg-muted text-muted-foreground" },
+	cancelled: {
+		label: "Cancelled",
+		className: "bg-status-rejected/15 text-status-rejected",
+	},
 } as const;
 
 export function KindChip({

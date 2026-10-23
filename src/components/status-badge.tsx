@@ -41,6 +41,10 @@ const styles = {
 		label: "Lost",
 		className: "bg-status-rejected/15 text-status-rejected",
 	},
+	cancelled: {
+		label: "Cancelled",
+		className: "bg-status-rejected/15 text-status-rejected",
+	},
 } as const;
 
 /** Badge status for a quote row (draft / approved / rejected / accepted). */
@@ -51,7 +55,8 @@ export function quoteBadge(
 		| "rejected"
 		| "accepted"
 		| "superseded"
-		| "lost",
+		| "lost"
+		| "cancelled",
 ): RequestStatus {
 	return status === "draft"
 		? "draft_ready"

@@ -28,6 +28,8 @@ export type OrbyteEventType =
 	| "quote.sent_to_customer"
 	| "quote.processing_failed"
 	| "quote.accepted"
+	| "quote.cancelled"
+	| "quote.cancellation_review_requested"
 	| "chat.taken_over"
 	| "chat.handed_back"
 	| "chat.staff_replied"
@@ -41,6 +43,7 @@ export type OrbyteEventType =
 	| "job.handover_ready"
 	| "job.assigned"
 	| "job.status_changed"
+	| "job.cancelled"
 	| "job.task_added"
 	| "job.agreement_changed"
 	| "job.agreement_reviewed"
@@ -60,6 +63,7 @@ export type OrbyteEventType =
 	| "quote.extended"
 	| "quote.lost"
 	| "stock.reserved"
+	| "stock.released"
 	| "stock.adjusted";
 
 export async function emitOrbyteEvent(

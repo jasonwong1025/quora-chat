@@ -94,6 +94,11 @@ function SignPage() {
 						This version was replaced by an updated quotation. Please open the
 						latest one from WhatsApp.
 					</p>
+				) : q.status === "cancelled" ? (
+					<p className="rounded-xl border border-status-rejected/30 bg-card p-5 text-sm">
+						This signed order was cancelled at the customer's request and is no
+						longer active.
+					</p>
 				) : (
 					<p className="rounded-xl border bg-card p-5 text-sm text-muted-foreground">
 						This quotation is not open for signing.

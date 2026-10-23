@@ -27,6 +27,11 @@ function envelopeStatus(q: EsignRow) {
 		};
 	if (q.status === "superseded")
 		return { label: "Replaced", className: "bg-muted text-muted-foreground" };
+	if (q.status === "cancelled")
+		return {
+			label: "Cancelled",
+			className: "bg-status-rejected/15 text-status-rejected",
+		};
 	if (q.viewedAt)
 		return {
 			label: "Viewed",
