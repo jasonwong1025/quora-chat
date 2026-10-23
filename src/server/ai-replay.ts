@@ -65,6 +65,8 @@ function reading(
 		confirmation: "none",
 		wantsChange: false,
 		customerQuestion: null,
+		topic: "business",
+		asksForDiscount: false,
 		quoteResponse: {
 			intent: "none",
 			resumeOn: null,

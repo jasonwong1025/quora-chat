@@ -2387,3 +2387,60 @@ test("billing: deposit on signing, balance and documents on completion, receipts
 	});
 	assert.equal(closed?.status, "closed", "fully paid and done closes the job");
 });
+
+test("an unrelated message never adds an item, even if the model lists one", async () => {
+	const s = await scenario();
+	reading = {
+		language: "ms",
+		summary: "Asking about football",
+		items: [
+			{
+				ref: "item",
+				productId: s.product.id,
+				match: "exact",
+				candidateProductIds: [],
+				rawText: "custom system",
+				quantity: 1,
+				removed: false,
+				reason: "Same",
+				answers: [],
+			},
+			{
+				ref: "",
+				productId: null,
+				match: "none",
+				candidateProductIds: [],
+				rawText: "siapa menang bola semalam",
+				quantity: null,
+				removed: false,
+				reason: "Not in catalog",
+				answers: [],
+			},
+		],
+		general: [],
+		followUpAnswers: [],
+		followUp: null,
+		confirmation: "none",
+		wantsChange: false,
+		quoteResponse: {
+			intent: "none",
+			resumeOn: null,
+			lostReason: null,
+			note: null,
+		},
+		customerQuestion: null,
+		topic: "off_topic",
+		asksForDiscount: false,
+		reasoning: ["Off-topic question"],
+	};
+	for await (const _ of handleCustomerMessage({
+		conversationId: s.conversation.id,
+		body: "siapa menang bola semalam?",
+	})) {
+		/* drain */
+	}
+	const after = await getDb().query.quoteRequests.findFirst({
+		where: eq(schema.quoteRequests.id, s.request.id),
+	});
+	assert.equal(after?.brief.items.length, 1);
+});

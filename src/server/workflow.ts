@@ -427,8 +427,12 @@ function applyReading(
 		}
 	};
 
+	// An unrelated or garbled message ("who won the football?") never adds items,
+	// and an item with no wording at all is never a real request.
+	const addsItems = !reading.topic || reading.topic === "business";
 	for (const r of reading.items) {
 		const existing = next.items.find((i) => i.id === r.ref);
+		if (!existing && (!addsItems || !r.rawText.trim())) continue;
 		if (existing && r.removed) {
 			next.items = next.items.filter((i) => i !== existing);
 			changed = true;
@@ -749,6 +753,8 @@ type Advance = {
 	run: Run;
 	history: ChatTurn[];
 	customerQuestion: string | null;
+	topic?: Reading["topic"];
+	asksForDiscount?: boolean;
 	messageId?: string;
 	/** Staff pressed "Ask now": always send something useful, never a recap of nothing. */
 	nudged?: boolean;
@@ -926,6 +932,8 @@ async function advanceRequest(a: Advance): Promise<{
 							language: brief.language,
 							plan,
 							customerQuestion: a.customerQuestion,
+							topic: a.topic,
+							asksForDiscount: a.asksForDiscount,
 							knowledge: await publicFaq(
 								business.id,
 								a.customerQuestion,
@@ -1804,6 +1812,8 @@ async function* customerTurn(
 							"Answer their question about this quotation using the agreed requirements. Do not change the scope, price or promise new work.",
 					},
 					customerQuestion: reading.customerQuestion,
+					topic: reading.topic,
+					asksForDiscount: reading.asksForDiscount,
 					knowledge: await publicFaq(
 						businessId,
 						reading.customerQuestion,
@@ -1903,6 +1913,8 @@ async function* customerTurn(
 					? { stage: "chat" }
 					: { stage: "need", offerings: offerings(products) },
 				customerQuestion: reading.customerQuestion,
+				topic: reading.topic,
+				asksForDiscount: reading.asksForDiscount,
 				knowledge: await publicFaq(businessId, reading.customerQuestion, run, [
 					reading.summary,
 					latestCustomerBody(history),
@@ -1931,6 +1943,8 @@ async function* customerTurn(
 			run,
 			history,
 			customerQuestion: reading.customerQuestion,
+			topic: reading.topic,
+			asksForDiscount: reading.asksForDiscount,
 			messageId: incoming.id,
 		});
 		status = result.status;
