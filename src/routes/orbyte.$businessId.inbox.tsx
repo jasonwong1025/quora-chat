@@ -122,11 +122,11 @@ function Avatar({ name, className }: { name: string; className?: string }) {
 
 function ModePill({ row }: { row: InboxRow }) {
 	return row.aiPaused ? (
-		<span className="inline-flex items-center gap-1 rounded-full bg-[var(--orb-navy)] px-2 py-0.5 text-[11px] font-medium text-white">
+		<span className="inline-flex items-center gap-1 bg-[var(--orb-navy)] px-2 py-0.5 text-[11px] font-medium text-white">
 			<UserRound className="size-3" /> {row.handledByName ?? "Staff"}
 		</span>
 	) : (
-		<span className="inline-flex items-center gap-1 rounded-full bg-[var(--orb-cyan)]/20 px-2 py-0.5 text-[11px] font-medium text-[#047a77]">
+		<span className="inline-flex items-center gap-1 bg-[var(--orb-cyan)]/20 px-2 py-0.5 text-[11px] font-medium text-[#047a77]">
 			<Bot className="size-3" /> AI
 		</span>
 	);
@@ -165,7 +165,7 @@ function ChatRow(props: {
 						<StatusBadge status={row.latestRequest.status} />
 					)}
 					{props.needsApproval && (
-						<span className="rounded-full bg-[var(--orb-royal)] px-2 py-0.5 text-[11px] font-medium text-white">
+						<span className="bg-[var(--orb-royal)] px-2 py-0.5 text-[11px] font-medium text-white">
 							Approve question
 						</span>
 					)}
@@ -277,13 +277,13 @@ function Conversation({ row, onBack }: { row: InboxRow; onBack: () => void }) {
 						return (
 							<Fragment key={m.id}>
 								{newDay && (
-									<p className="my-2 self-center rounded-full bg-card px-3 py-0.5 text-xs text-muted-foreground shadow-sm">
+									<p className="my-2 self-center bg-card px-3 py-0.5 text-xs text-muted-foreground">
 										{dayLabel(m.createdAt)}
 									</p>
 								)}
 								<div
 									className={cn(
-										"max-w-[88%] rounded-2xl px-3.5 py-2 text-sm break-words shadow-sm @xl:max-w-[80%]",
+										"max-w-[88%] rounded-2xl px-3.5 py-2 text-sm break-words @xl:max-w-[80%]",
 										!out && "self-start rounded-tl-sm border bg-card",
 										m.sender === "assistant" &&
 											"self-end rounded-tr-sm bg-[#dff4ff]",

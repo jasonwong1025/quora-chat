@@ -63,15 +63,12 @@ export function PageHeader(props: {
 	actions?: React.ReactNode;
 }) {
 	return (
-		<div className="flex flex-wrap items-end justify-between gap-3 pb-5">
+		<div className="mb-5 flex flex-wrap items-end justify-between gap-3 border-b pb-4">
 			<div>
 				<h1 className="flex items-center gap-2 text-2xl font-semibold tracking-tight">
 					{props.title}
 					{props.badge && (
-						<span
-							className="rounded-full px-2 py-0.5 text-[10px] font-semibold tracking-wide text-white uppercase"
-							style={{ background: "var(--orb-gradient)" }}
-						>
+						<span className="bg-[var(--orb-royal)] px-1.5 py-0.5 text-[10px] font-semibold tracking-wide text-white uppercase">
 							{props.badge}
 						</span>
 					)}

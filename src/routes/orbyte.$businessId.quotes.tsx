@@ -87,7 +87,7 @@ function Quotes() {
 									type="button"
 									onClick={() => setFilter(key as keyof typeof filters)}
 									className={cn(
-										"shrink-0 rounded-full border px-2.5 py-1 text-xs",
+										"shrink-0 border px-2.5 py-1 text-xs",
 										filter === key
 											? "border-primary bg-primary text-primary-foreground"
 											: "hover:bg-muted",

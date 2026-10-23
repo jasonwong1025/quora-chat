@@ -46,7 +46,7 @@ export function KindChip({
 	return (
 		<span
 			className={cn(
-				"inline-flex rounded-full px-2 py-0.5 text-[10px] font-semibold tracking-wide uppercase",
+				"inline-flex px-2 py-0.5 text-[10px] font-semibold tracking-wide uppercase",
 				k.className,
 				className,
 			)}
@@ -65,7 +65,7 @@ export function JobStatusChip({
 	return (
 		<span
 			className={cn(
-				"inline-flex rounded-full px-2 py-0.5 text-xs font-medium whitespace-nowrap",
+				"inline-flex px-2 py-0.5 text-xs font-medium whitespace-nowrap",
 				s.className,
 			)}
 		>

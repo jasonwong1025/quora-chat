@@ -614,12 +614,7 @@ function RelayStatus({
 		rejected: ["Not sent", "bg-status-review/10 text-status-review"],
 	}[status];
 	return (
-		<span
-			className={cn(
-				"shrink-0 rounded-full px-2 py-0.5 text-[11px] font-medium",
-				s[1],
-			)}
-		>
+		<span className={cn("shrink-0 px-2 py-0.5 text-[11px] font-medium", s[1])}>
 			{s[0]}
 		</span>
 	);
@@ -784,7 +779,7 @@ function ChatTab({
 
 	return (
 		<div className="mx-auto flex max-w-3xl flex-col gap-1.5">
-			<p className="mb-2 self-center rounded-full bg-card px-3 py-1 text-xs text-muted-foreground shadow-sm">
+			<p className="mb-2 self-center bg-card px-3 py-1 text-xs text-muted-foreground">
 				Read-only. The PIC doesn't message the customer; use "Ask the customer".
 			</p>
 			{job.messages.map((m, i) => {
@@ -795,7 +790,7 @@ function ChatTab({
 				return (
 					<Fragment key={m.id}>
 						{newDay && (
-							<p className="my-2 self-center rounded-full bg-card px-3 py-0.5 text-xs text-muted-foreground shadow-sm">
+							<p className="my-2 self-center bg-card px-3 py-0.5 text-xs text-muted-foreground">
 								{dayLabel(m.createdAt)}
 							</p>
 						)}
@@ -804,7 +799,7 @@ function ChatTab({
 								if (el) refs.current.set(m.id, el);
 							}}
 							className={cn(
-								"max-w-[80%] rounded-2xl px-3.5 py-2 text-sm shadow-sm transition-shadow",
+								"max-w-[80%] rounded-2xl px-3.5 py-2 text-sm transition-shadow",
 								out
 									? "self-end rounded-tr-sm bg-[#dff4ff]"
 									: "self-start rounded-tl-sm border bg-card",
@@ -1229,7 +1224,7 @@ function TeamChat({
 														disabled={done || !isMember}
 														onClick={() => apply(key, a)}
 														className={cn(
-															"inline-flex max-w-full items-center gap-1.5 rounded-full border px-2.5 py-1 text-left text-xs hover:bg-muted disabled:opacity-60",
+															"inline-flex max-w-full items-center gap-1.5 border px-2.5 py-1 text-left text-xs hover:bg-muted disabled:opacity-60",
 															a.kind === "ask_customer" &&
 																"border-[var(--orb-royal)]/40 text-[var(--orb-royal)]",
 														)}

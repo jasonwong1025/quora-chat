@@ -92,15 +92,9 @@ export function RequestDetail(props: {
 				<NextActionBanner request={request} />
 			</div>
 
-			<div className="sticky top-0 z-10 border-b bg-card px-1">
-				<TabsList
-					variant="line"
-					className="h-10 w-full justify-start gap-0 p-0"
-				>
-					<TabsTrigger
-						value="brief"
-						className="h-10 flex-none rounded-none border-0 border-b-2 border-transparent px-3 text-[13px] font-medium text-muted-foreground shadow-none after:hidden focus-visible:border-transparent focus-visible:bg-muted focus-visible:ring-0 focus-visible:outline-none data-[state=active]:border-b-[var(--orb-royal)] data-[state=active]:text-foreground"
-					>
+			<div className="sticky top-0 z-10 bg-card px-1">
+				<TabsList>
+					<TabsTrigger value="brief">
 						Requirements
 						{a.requiredTotal > 0 && (
 							<span className="text-[11px] text-muted-foreground tabular-nums">
@@ -108,16 +102,13 @@ export function RequestDetail(props: {
 							</span>
 						)}
 					</TabsTrigger>
-					<TabsTrigger
-						value="quote"
-						className="h-10 flex-none rounded-none border-0 border-b-2 border-transparent px-3 text-[13px] font-medium text-muted-foreground shadow-none after:hidden focus-visible:border-transparent focus-visible:bg-muted focus-visible:ring-0 focus-visible:outline-none data-[state=active]:border-b-[var(--orb-royal)] data-[state=active]:text-foreground"
-					>
+					<TabsTrigger value="quote">
 						Quotation
 						{attention ? (
-							<span
-								className="size-1.5 bg-status-review"
-								aria-label="needs checking"
-							/>
+							<>
+								<span className="size-1.5 bg-status-review" />
+								<span className="sr-only">needs checking</span>
+							</>
 						) : quote ? (
 							<span className="text-[11px] text-muted-foreground tabular-nums">
 								{formatMYR(quote.totalSen)}
@@ -125,12 +116,7 @@ export function RequestDetail(props: {
 						) : null}
 					</TabsTrigger>
 					{props.showActivity !== false && (
-						<TabsTrigger
-							value="activity"
-							className="h-10 flex-none rounded-none border-0 border-b-2 border-transparent px-3 text-[13px] font-medium text-muted-foreground shadow-none after:hidden focus-visible:border-transparent focus-visible:bg-muted focus-visible:ring-0 focus-visible:outline-none data-[state=active]:border-b-[var(--orb-royal)] data-[state=active]:text-foreground"
-						>
-							Activity
-						</TabsTrigger>
+						<TabsTrigger value="activity">Activity</TabsTrigger>
 					)}
 				</TabsList>
 			</div>

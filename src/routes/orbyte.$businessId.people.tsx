@@ -104,7 +104,7 @@ function People() {
 										<td className="px-4 py-3">
 											<span
 												className={cn(
-													"rounded-full px-2 py-0.5 text-xs font-medium capitalize",
+													"px-2 py-0.5 text-xs font-medium capitalize",
 													pill[r.status],
 												)}
 											>
@@ -159,7 +159,7 @@ function People() {
 										<td className="px-4 py-3">
 											<span
 												className={cn(
-													"rounded-full px-2 py-0.5 text-xs font-medium capitalize",
+													"px-2 py-0.5 text-xs font-medium capitalize",
 													pill[c.status],
 												)}
 											>

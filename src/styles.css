@@ -177,9 +177,18 @@
   --border: #dce4f5;
   --input: #dce4f5;
   --ring: #00b4fe;
-  --radius: 0.75rem;
+  /* Corporate look: square corners everywhere in Orbyte (avatars and dots stay round). */
+  --radius: 0px;
+  --radius-2xl: 0px;
+  --radius-3xl: 0px;
   --status-draft: #0050fe;
   background: var(--background);
   color: var(--foreground);
 }
+}
+
+/* rounded-xl is radius + 4px and plain rounded is fixed, so square them explicitly. */
+.orbyte .rounded,
+.orbyte .rounded-xl {
+  border-radius: 0;
 }

@@ -12,7 +12,7 @@ import {
 } from "lucide-react";
 import { ActivityFeed } from "#/components/activity-feed";
 import { lostLabel } from "#/components/orbyte/follow-up-panel";
-import { PageHeader, useWorkspace } from "#/components/orbyte/workspace";
+import { useWorkspace } from "#/components/orbyte/workspace";
 import { StatusBadge } from "#/components/status-badge";
 import { formatMYR } from "#/lib/money";
 import { ago } from "#/lib/time";
@@ -144,60 +144,59 @@ function Home() {
 	];
 
 	return (
-		<div className="p-4 sm:p-6">
-			<div
-				className="mb-6 overflow-hidden rounded-2xl p-6 text-white sm:p-8"
-				style={{ background: "var(--orb-gradient)" }}
-			>
-				<p className="text-sm text-white/70">{business.name}</p>
-				<h1 className="mt-1 text-2xl font-semibold tracking-tight sm:text-3xl">
-					{greeting()}
-					{me ? `, ${me.name.split(" ")[0]}` : ""}.
-				</h1>
-				<p className="mt-2 max-w-xl text-sm text-white/80">
+		<div className="space-y-6 p-4 sm:p-6">
+			<header className="flex flex-wrap items-end justify-between gap-3 border-b pb-4">
+				<div>
+					<p className="text-xs font-medium tracking-wide text-muted-foreground uppercase">
+						{business.name}
+					</p>
+					<h1 className="mt-1 text-2xl font-semibold tracking-tight">
+						{greeting()}
+						{me ? `, ${me.name.split(" ")[0]}` : ""}
+					</h1>
+				</div>
+				<p className="text-sm text-muted-foreground">
 					{attention.length > 0
-						? `${attention.length} quotation${attention.length > 1 ? "s" : ""} need${attention.length > 1 ? "" : "s"} your review.`
-						: "Everything is up to date. New WhatsApp requests will appear in the Quotation inbox."}
+						? `${attention.length} quotation${attention.length > 1 ? "s" : ""} to review`
+						: "All up to date"}
 				</p>
-			</div>
+			</header>
 
-			<div className="grid grid-cols-2 gap-3 lg:grid-cols-5">
+			<div className="grid grid-cols-2 gap-px border bg-border sm:grid-cols-5">
 				{stats.map((s) => (
 					<Link
 						key={s.label}
 						to={s.to}
 						params={{ businessId: business.id }}
-						className="rounded-xl border bg-card p-4 hover:border-[var(--orb-sky)]"
+						className="bg-card px-4 py-3 transition-colors last:col-span-2 hover:bg-muted/40 sm:last:col-span-1"
 					>
-						<p className="text-xs text-muted-foreground">{s.label}</p>
+						<p className="text-[11px] font-medium tracking-wide text-muted-foreground uppercase">
+							{s.label}
+						</p>
 						<p className="mt-1 text-2xl font-semibold tabular-nums">
 							{s.value}
 						</p>
-						{s.hint && (
-							<p className="mt-0.5 text-[11px] text-muted-foreground">
-								{s.hint}
-							</p>
-						)}
+						<p className="mt-0.5 min-h-4 text-[11px] text-muted-foreground">
+							{s.hint ?? ""}
+						</p>
 					</Link>
 				))}
 			</div>
 
-			<div className="mt-6 grid gap-6 lg:grid-cols-5">
-				<section className="rounded-xl border bg-card lg:col-span-3">
-					<div className="flex items-center justify-between border-b px-4 py-3">
-						<h2 className="font-semibold">Needs your attention</h2>
+			<div className="grid gap-6 lg:grid-cols-5">
+				<section className="border bg-card lg:col-span-3 lg:self-start">
+					<SectionHead title="Needs your attention">
 						<Link
 							to="/orbyte/$businessId/quotes"
 							params={{ businessId: business.id }}
-							className="flex items-center gap-1 text-sm text-primary"
+							className="flex items-center gap-1 text-xs font-medium text-primary"
 						>
 							All quotes <ArrowRight className="size-3.5" />
 						</Link>
-					</div>
+					</SectionHead>
 					{attention.length === 0 ? (
-						<p className="p-6 text-sm text-muted-foreground">
-							Nothing waiting. Send a message from the WhatsApp portal to see a
-							request arrive.
+						<p className="px-4 py-6 text-sm text-muted-foreground">
+							Nothing waiting
 						</p>
 					) : (
 						<ul className="divide-y">
@@ -207,7 +206,7 @@ function Home() {
 										to="/orbyte/$businessId/quotes"
 										params={{ businessId: business.id }}
 										search={{ r: x.id }}
-										className="flex items-center gap-3 px-4 py-3 hover:bg-muted/50"
+										className="flex items-center gap-3 px-4 py-3 hover:bg-muted/40"
 									>
 										<FileText className="size-4 shrink-0 text-muted-foreground" />
 										<div className="min-w-0 flex-1">
@@ -225,7 +224,7 @@ function Home() {
 											</p>
 										</div>
 										<StatusBadge status={x.status} />
-										<span className="hidden text-xs text-muted-foreground sm:inline">
+										<span className="hidden w-16 text-right text-xs text-muted-foreground sm:inline">
 											{ago(x.updatedAt)}
 										</span>
 									</Link>
@@ -235,47 +234,54 @@ function Home() {
 					)}
 				</section>
 
-				<section className="rounded-xl border bg-card p-4 lg:col-span-2">
-					<h2 className="mb-3 font-semibold">Activity</h2>
-					<div className="max-h-96 overflow-y-auto">
+				<section className="border bg-card lg:col-span-2">
+					<SectionHead title="Activity" />
+					<div className="max-h-96 overflow-y-auto p-4">
 						<ActivityFeed businessId={business.id} />
 					</div>
 				</section>
 			</div>
 
-			<div className="mt-8">
-				<PageHeader title="Your modules" />
-			</div>
-			<div className="-mt-2 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-				{modules.map((m) => (
-					<Link
-						key={m.name}
-						to={m.to}
-						params={{ businessId: business.id }}
-						className="flex items-start gap-3 rounded-xl border bg-card p-4 hover:border-[var(--orb-sky)]"
-					>
-						<span className="flex size-10 shrink-0 items-center justify-center rounded-lg bg-secondary text-primary">
-							<m.icon className="size-5" />
-						</span>
-						<span>
-							<span className="flex items-center gap-2 font-medium">
-								{m.name}
-								{m.isNew && (
-									<span
-										className="rounded-full px-1.5 py-px text-[9px] font-semibold text-white uppercase"
-										style={{ background: "var(--orb-gradient)" }}
-									>
-										New
-									</span>
-								)}
+			<section className="border bg-card">
+				<SectionHead title="Modules" />
+				<div className="grid gap-px bg-border sm:grid-cols-2 lg:grid-cols-3">
+					{modules.map((m) => (
+						<Link
+							key={m.name}
+							to={m.to}
+							params={{ businessId: business.id }}
+							className="group flex items-center gap-3 bg-card px-4 py-3 hover:bg-muted/40"
+						>
+							<m.icon className="size-4 shrink-0 text-[var(--orb-royal)]" />
+							<span className="min-w-0 flex-1">
+								<span className="flex items-center gap-2 text-sm font-medium">
+									{m.name}
+									{m.isNew && (
+										<span className="bg-[var(--orb-royal)] px-1 py-px text-[9px] font-semibold text-white uppercase">
+											New
+										</span>
+									)}
+								</span>
+								<span className="block truncate text-xs text-muted-foreground">
+									{m.text}
+								</span>
 							</span>
-							<span className="block text-sm text-muted-foreground">
-								{m.text}
-							</span>
-						</span>
-					</Link>
-				))}
-			</div>
+							<ArrowRight className="size-3.5 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100" />
+						</Link>
+					))}
+				</div>
+			</section>
+		</div>
+	);
+}
+
+function SectionHead(props: { title: string; children?: React.ReactNode }) {
+	return (
+		<div className="flex h-11 items-center justify-between border-b px-4">
+			<h2 className="text-xs font-semibold tracking-wide text-muted-foreground uppercase">
+				{props.title}
+			</h2>
+			{props.children}
 		</div>
 	);
 }

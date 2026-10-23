@@ -388,7 +388,7 @@ function QuestionsTab(props: {
 											<button
 												type="button"
 												onClick={() => props.onOpenProduct(p.id)}
-												className="rounded-full border px-2.5 py-1 text-xs hover:bg-muted"
+												className="border px-2.5 py-1 text-xs hover:bg-muted"
 											>
 												{p.name}{" "}
 												<span className="text-muted-foreground">
@@ -595,7 +595,7 @@ function ProductRow(props: {
 			</td>
 			<td className="px-4 py-2 whitespace-nowrap tabular-nums">
 				{p.pricingMode === "custom" ? (
-					<span className="rounded-full bg-secondary px-2 py-0.5 text-[11px] font-medium text-primary">
+					<span className="bg-secondary px-2 py-0.5 text-[11px] font-medium text-primary">
 						Custom quote
 					</span>
 				) : p.unitPriceSen > 0 ? (
@@ -1029,7 +1029,7 @@ function Chip(props: { className?: string; children: React.ReactNode }) {
 	return (
 		<span
 			className={cn(
-				"rounded-full bg-muted px-2 py-0.5 text-[11px] font-medium",
+				"bg-muted px-2 py-0.5 text-[11px] font-medium",
 				props.className,
 			)}
 		>
@@ -1393,7 +1393,7 @@ function RuleList(props: { rules: PricingRule[]; products: Product[] }) {
 				<div key={r.id} className="rounded-xl border bg-card p-4">
 					<div className="flex items-start justify-between gap-2">
 						<div>
-							<span className="rounded-full bg-secondary px-2 py-0.5 text-[11px] font-medium text-primary">
+							<span className="bg-secondary px-2 py-0.5 text-[11px] font-medium text-primary">
 								{ruleKind[r.config.kind]}
 							</span>
 							<p className="mt-2 text-sm font-medium">{r.description}</p>

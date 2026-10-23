@@ -48,11 +48,11 @@ type Draft = {
 
 function VisibilityChip({ visibility }: { visibility: Visibility }) {
 	return visibility === "public" ? (
-		<span className="inline-flex items-center gap-1 rounded-full bg-status-approved/15 px-2 py-0.5 text-[11px] font-medium text-status-approved">
+		<span className="inline-flex items-center gap-1 bg-status-approved/15 px-2 py-0.5 text-[11px] font-medium text-status-approved">
 			<Globe className="size-3" /> Public
 		</span>
 	) : (
-		<span className="inline-flex items-center gap-1 rounded-full bg-[var(--orb-navy)]/10 px-2 py-0.5 text-[11px] font-medium text-[var(--orb-navy)]">
+		<span className="inline-flex items-center gap-1 bg-[var(--orb-navy)]/10 px-2 py-0.5 text-[11px] font-medium text-[var(--orb-navy)]">
 			<Lock className="size-3" /> Internal
 		</span>
 	);
@@ -132,7 +132,7 @@ function Knowledge() {
 								aria-pressed={only === v}
 								onClick={() => setOnly(v)}
 								className={cn(
-									"rounded-full border px-3 py-1 text-xs",
+									"border px-3 py-1 text-xs",
 									only === v
 										? "border-primary bg-primary text-primary-foreground"
 										: "bg-card hover:bg-muted",

@@ -193,10 +193,7 @@ function Shell() {
 							<p className="mb-1 flex items-center gap-2 px-2 text-[11px] font-semibold tracking-wider text-white/50 uppercase">
 								{g.title}
 								{g.badge && (
-									<span
-										className="rounded-full px-1.5 py-px text-[9px] text-white"
-										style={{ background: "var(--orb-gradient)" }}
-									>
+									<span className="bg-[var(--orb-royal)] px-1 py-px text-[9px] font-semibold text-white">
 										{g.badge}
 									</span>
 								)}
@@ -217,7 +214,7 @@ function Shell() {
 										<item.icon className="size-4" />
 										<span className="flex-1">{item.label}</span>
 										{item.count ? (
-											<span className="rounded-full bg-[var(--orb-cyan)] px-1.5 text-[11px] font-semibold text-[var(--orb-navy)]">
+											<span className="bg-[var(--orb-cyan)] px-1.5 text-[11px] font-semibold text-[var(--orb-navy)]">
 												{item.count}
 											</span>
 										) : null}

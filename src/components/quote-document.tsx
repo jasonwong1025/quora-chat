@@ -15,7 +15,7 @@ import type { QuoteDetail } from "#/lib/types";
 export function QuoteDocument({ q }: { q: QuoteDetail }) {
 	const business = q.business;
 	return (
-		<article className="rounded-xl border bg-card p-6 shadow-sm sm:p-8">
+		<article className="rounded-xl border bg-card p-6 sm:p-8">
 			<header className="flex flex-wrap justify-between gap-4">
 				<div>
 					<h1 className="text-xl font-bold">{business?.name}</h1>
@@ -88,7 +88,7 @@ export function QuoteDocument({ q }: { q: QuoteDetail }) {
 									<td className="py-2 text-right whitespace-nowrap">
 										{l.quantity} {l.unit}
 									</td>
-									<td className="py-2 pl-2 text-right tabular-nums">
+									<td className="py-2 pl-2 text-right whitespace-nowrap tabular-nums">
 										{formatMYR(l.unitPriceSen)}
 									</td>
 									<td className="py-2 pl-2 text-right whitespace-nowrap tabular-nums">

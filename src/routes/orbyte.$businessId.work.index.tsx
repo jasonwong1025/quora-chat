@@ -214,12 +214,12 @@ function JobCard({ job }: { job: JobRow }) {
 			)}
 			<div className="mt-2 flex flex-wrap items-center gap-1.5">
 				{job.blocked > 0 && (
-					<span className="inline-flex items-center gap-1 rounded-full bg-status-review/10 px-1.5 py-0.5 text-[11px] text-status-review">
+					<span className="inline-flex items-center gap-1 bg-status-review/10 px-1.5 py-0.5 text-[11px] text-status-review">
 						<AlertTriangle className="size-3" /> {job.blocked} blocked
 					</span>
 				)}
 				{job.waitingOnCustomer > 0 && (
-					<span className="inline-flex items-center gap-1 rounded-full bg-status-clarify/20 px-1.5 py-0.5 text-[11px] text-[#9a6a00]">
+					<span className="inline-flex items-center gap-1 bg-status-clarify/20 px-1.5 py-0.5 text-[11px] text-[#9a6a00]">
 						<MessageCircleQuestion className="size-3" /> Waiting on customer
 					</span>
 				)}
