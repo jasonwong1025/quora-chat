@@ -18,10 +18,13 @@ export function QuoteDocument({ q }: { q: QuoteDetail }) {
 	return (
 		<article className="rounded-xl border bg-card p-6 sm:p-8">
 			<header className="flex flex-wrap justify-between gap-4">
-				<div>
-					<h1 className="text-xl font-bold">{business?.name}</h1>
-					<p className="text-sm text-muted-foreground">{business?.address}</p>
-					<p className="text-sm text-muted-foreground">{business?.phone}</p>
+				<div className="flex items-start gap-3">
+					<img src="/orbyte-icon.png" alt="Orbyte" className="mt-0.5 size-9" />
+					<div>
+						<h1 className="text-xl font-bold">{business?.name}</h1>
+						<p className="text-sm text-muted-foreground">{business?.address}</p>
+						<p className="text-sm text-muted-foreground">{business?.phone}</p>
+					</div>
 				</div>
 				<div className="sm:text-right">
 					<p className="text-xl font-bold tracking-wide">QUOTATION</p>

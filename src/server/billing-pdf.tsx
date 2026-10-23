@@ -14,7 +14,7 @@ import { getDb, schema } from "#/db";
 import { triggerLabel } from "#/lib/billing";
 import { formatMYR } from "#/lib/money";
 import { statementFor } from "./billing";
-import { s } from "./quote-pdf";
+import { PdfBrand, s } from "./quote-pdf";
 
 type Business = typeof schema.businesses.$inferSelect;
 const day = (d: Date) =>
@@ -28,11 +28,11 @@ function Header(props: {
 }) {
 	return (
 		<View style={s.between}>
-			<View>
+			<PdfBrand>
 				<Text style={s.h1}>{props.business.name}</Text>
 				<Text style={s.muted}>{props.business.address}</Text>
 				<Text style={s.muted}>{props.business.phone}</Text>
-			</View>
+			</PdfBrand>
 			<View style={{ alignItems: "flex-end" }}>
 				<Text style={s.h1}>{props.title}</Text>
 				<Text>{props.number}</Text>

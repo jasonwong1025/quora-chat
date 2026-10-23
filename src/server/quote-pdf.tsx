@@ -3,6 +3,7 @@ import { resolve } from "node:path";
 import {
 	Document,
 	Font,
+	Image,
 	Page,
 	renderToBuffer,
 	StyleSheet,
@@ -24,6 +25,24 @@ import { formatMYR } from "./pricing";
 
 type Quote = typeof schema.quotes.$inferSelect;
 type Business = typeof schema.businesses.$inferSelect;
+
+/** Public files, in dev (public/) or the production build (.output/public/). */
+function publicFile(path: string) {
+	const source = resolve(`public/${path}`);
+	return existsSync(source) ? source : resolve(`.output/public/${path}`);
+}
+
+const logo = publicFile("orbyte-icon.png");
+
+/** The Orbyte mark beside the business details, at the top of every document. */
+export function PdfBrand(props: { children: React.ReactNode }) {
+	return (
+		<View style={{ flexDirection: "row", alignItems: "flex-start" }}>
+			<Image src={logo} style={{ width: 30, height: 31, marginRight: 10 }} />
+			<View>{props.children}</View>
+		</View>
+	);
+}
 
 const sourceFont = resolve("public/fonts/NotoSansSC-Regular.otf");
 Font.register({
@@ -91,11 +110,11 @@ export async function renderQuotePdf(input: {
 		<Document title={quote.number} author={business.name}>
 			<Page size="A4" style={s.page}>
 				<View style={s.between}>
-					<View>
+					<PdfBrand>
 						<Text style={s.h1}>{business.name}</Text>
 						<Text style={s.muted}>{business.address}</Text>
 						<Text style={s.muted}>{business.phone}</Text>
-					</View>
+					</PdfBrand>
 					<View style={{ alignItems: "flex-end" }}>
 						<Text style={s.h1}>QUOTATION</Text>
 						<Text>{quote.number}</Text>
