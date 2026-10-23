@@ -19,8 +19,8 @@ const port = listener.address().port;
 await new Promise((resolve) => listener.close(resolve));
 const env = {
 	...process.env,
-	OPENROUTER_API_KEY: "isolated-test-key",
-	AI_BASE_URL: "http://127.0.0.1:1/v1",
+AI_INTEGRATIONS_OPENAI_API_KEY: "isolated-test-key",
+AI_INTEGRATIONS_OPENAI_BASE_URL: "http://127.0.0.1:1/v1",
 	DATABASE_URL: `postgresql://quora_test@127.0.0.1:${port}/postgres`,
 	QUORA_ISOLATED_DB_TEST: "1",
 };

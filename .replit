@@ -1,19 +1,39 @@
-run = "pnpm install && pnpm dev"
-modules = ["nodejs-20", "web", "python-3.12"]
+run = "pnpm dev"
+modules = ["web", "python-3.12", "nodejs-22", "postgresql-16"]
+
 [[ports]]
-localPort = 3000
+localPort = 5000
 externalPort = 80
-[[ports]]
-localPort = 3001
-externalPort = 3001
+
 [deployment]
-# Choose "Reserved VM" in Publishing → Adjust settings → Deployment type: the
-# signing → job handover worker must stay running. Replit updates
-# deploymentTarget when you change the type there. See docs/DEMO.md.
-deploymentTarget = "autoscale"
-build = ["sh", "-c", "pnpm install --frozen-lockfile && pnpm build"]
-# Apply checksummed, additive migrations, then run the web app and the worker together.
-run = ["sh", "-c", "pnpm db:migrate && pnpm start:with-worker"]
+deploymentTarget = "vm"
+build = ["sh", "-c", "CI=true pnpm install --frozen-lockfile && pnpm build"]
+# Replit's Publish flow manages production schema changes.
+run = ["sh", "-c", "pnpm start:with-worker"]
 
 [nix]
 channel = "stable-25_05"
+
+[workflows]
+runButton = "Project"
+
+[[workflows.workflow]]
+name = "Project"
+mode = "parallel"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "Start application"
+
+[[workflows.workflow]]
+name = "Start application"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "pnpm dev"
+waitForPort = 5000
+
+[workflows.workflow.metadata]
+outputType = "webview"

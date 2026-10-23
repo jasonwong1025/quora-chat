@@ -1,0 +1,1 @@
+- [Replit runtime constraints](replit-runtime.md) — why the import's newer pnpm pin must not be restored without testing.

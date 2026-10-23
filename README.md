@@ -50,7 +50,7 @@ Open `/whatsapp` and `/orbyte` in two tabs side by side. People and Connect show
 - [Hono](https://hono.dev): HTTP layer, mounted at `/api/*` inside Start
 - [oRPC](https://orpc.unnoq.com): typed RPC at `/api/rpc`, with streaming workflow progress
 - [Drizzle ORM](https://orm.drizzle.team) on [Replit Database](https://replit.com/products/database) (Postgres)
-- OpenRouter (OpenAI-compatible API) for message parsing and replies
+- Replit-managed OpenAI (Replit AI Integrations) for message parsing and replies
 - Tailwind CSS v4 and shadcn/ui, plus `@react-pdf/renderer` for quotation PDFs
 
 ## Getting started
@@ -63,7 +63,7 @@ pnpm db:seed              # load the 5 demo businesses (new disposable DB only)
 pnpm dev                  # http://localhost:3000, plus the signing → handover worker
 ```
 
-Set `OPENROUTER_API_KEY` (from https://openrouter.ai/keys). `AI_MODEL` takes an OpenRouter model id and defaults to `openai/gpt-5-mini`; it must support structured outputs.
+See [SETUP.md](SETUP.md) for the Replit setup. AI uses Replit-managed OpenAI through `AI_INTEGRATIONS_OPENAI_BASE_URL` and `AI_INTEGRATIONS_OPENAI_API_KEY`, with no fallback provider. `AI_MODEL` defaults to `gpt-5-mini` and must support strict structured outputs and `reasoning_effort: "minimal"`. Use Node.js 22 and pnpm 10.26.1. The Replit preview runs on port 5000.
 
 ## Demo businesses
 
@@ -84,7 +84,7 @@ src/
   data/demo.ts          synthetic businesses, catalogs, pricing rules, sample messages
   db/                   Drizzle schema, client, seed script
   server/
-    ai.ts               reads messages into the brief, writes replies, suggests questions (OpenRouter)
+    ai.ts               reads messages into the brief, writes replies, suggests questions (Replit-managed OpenAI)
     pricing.ts          deterministic pricing engine
     workflow.ts         message → brief → ask / confirm / draft → approval → revision → signing
     followups.ts        reminders for unsigned quotes, reply routing, extension, lost, demo clock
@@ -126,8 +126,8 @@ src/
 
 ## Deploying on Replit
 
-The checked-in `.replit` describes the previous web-only autoscale deployment. This workflow also needs a continuously running worker. Configure an always-on host for `pnpm start:with-worker`, or run web and worker separately against the same database. Do not rely on web requests to finish handovers.
+The checked-in `.replit` uses an always-on Reserved VM with `pnpm start:with-worker` because handovers require a continuously running worker. Do not rely on web requests to finish handovers. Publishing is a separate, user-approved action. Restrict access: the staff selector is not authentication.
 
-For an existing database, back it up, stop web and worker processes, run `pnpm db:migrate`, and start the new version. **Do not run `db:seed` on an existing database**; it resets demo data. Fresh disposable demos can use `db:push` and `db:seed`.
+For an existing development database, back it up, stop web and worker processes, run `pnpm db:migrate`, and start the new version. **Do not run `db:seed` on an existing database**; it resets demo data. Fresh disposable development demos can use `db:push` and `db:seed`. Replit's Publish flow manages production schema changes; never run schema pushes or seeds against production.
 
-Set `DATABASE_URL`, `OPENROUTER_API_KEY` and `AI_MODEL` in deployment secrets. Keep the repository, `scripts/`, dependencies (including `tsx`) and bundled PDF font available to the runtime. See the [rollout guide](docs/requirements-agreement-workflow.md) for legacy records, recovery and remaining limitations.
+Replit provides `DATABASE_URL`; connect Replit-managed OpenAI to supply the `AI_INTEGRATIONS_OPENAI_*` settings. Set `AI_MODEL` only to override the default. Keep the repository, `scripts/`, dependencies (including `tsx`) and bundled PDF font available to the runtime. See the [rollout guide](docs/requirements-agreement-workflow.md) for legacy records, recovery and remaining limitations; its manual production migration steps are not applicable to Replit-managed production databases.

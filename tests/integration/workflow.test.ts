@@ -135,8 +135,8 @@ before(async () => {
 	const address = server.address();
 	if (!address || typeof address === "string")
 		throw new Error("Mock server did not start");
-	process.env.AI_BASE_URL = `http://127.0.0.1:${address.port}/v1`;
-	process.env.OPENROUTER_API_KEY = "local-test-only";
+process.env.AI_INTEGRATIONS_OPENAI_BASE_URL = `http://127.0.0.1:${address.port}/v1`;
+process.env.AI_INTEGRATIONS_OPENAI_API_KEY = "local-test-only";
 });
 afterEach(async () => {
 	reading = null;

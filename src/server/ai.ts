@@ -20,27 +20,40 @@ import {
 
 let client: OpenAI | undefined;
 
-/** OpenRouter, via its OpenAI-compatible API. */
+/**
+ * Replit-managed OpenAI (Replit AI Integrations). Replit injects both variables
+ * inside the Repl and its deployments; usage is billed to the Replit account.
+ * There is deliberately no fallback to another provider or a personal key.
+ */
+const AI_PROVIDER = "replit-ai-integrations/openai";
+
 function getClient() {
 	if (client) return client;
-	const apiKey = process.env.OPENROUTER_API_KEY;
-	if (!apiKey) {
-		throw new Error("No AI credentials. Set OPENROUTER_API_KEY in .env.");
+const baseURL = process.env.AI_INTEGRATIONS_OPENAI_BASE_URL;
+const apiKey = process.env.AI_INTEGRATIONS_OPENAI_API_KEY;
+if (!baseURL || !apiKey) {
+throw new Error(
+"Replit AI Integrations (OpenAI) is not configured: AI_INTEGRATIONS_OPENAI_BASE_URL and AI_INTEGRATIONS_OPENAI_API_KEY must be set.",
+);
 	}
-	client = new OpenAI({
-		apiKey,
-		baseURL: process.env.AI_BASE_URL || "https://openrouter.ai/api/v1",
-		defaultHeaders: { "X-Title": "Quora Chat" },
-	});
+client = new OpenAI({ apiKey, baseURL });
 	return client;
 }
 
-// OpenRouter model ids are "provider/model". The model must support
-// structured outputs (json_schema), which reading relies on.
-const model = () => process.env.AI_MODEL || "openai/gpt-5-mini";
+// OpenAI model id. It must support strict structured outputs (json_schema) and
+// the reasoning_effort values used below ("minimal" | "low"); gpt-5-mini does.
+const model = () => process.env.AI_MODEL || "gpt-5-mini";
 /** What the AI thinking log records as the model; replay mode says so. */
 export const aiModelName = () => (isReplay() ? REPLAY_MODEL : model());
 export const aiMode = () => (isReplay() ? "replay" : "live");
+
+// One line per process (web server and worker) naming the provider and model.
+// Never log credentials or message contents.
+console.info(
+isReplay()
+? `[ai] mode=replay model=${REPLAY_MODEL}`
+: `[ai] mode=live provider=${AI_PROVIDER} model=${model()} configured=${Boolean(process.env.AI_INTEGRATIONS_OPENAI_BASE_URL && process.env.AI_INTEGRATIONS_OPENAI_API_KEY)}`,
+);
 
 /** One chat call that must return JSON matching `jsonSchema`, checked again with zod. */
 // Reasoning models are slow at high effort; these tasks are narrow, so keep it low.
