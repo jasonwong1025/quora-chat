@@ -10,6 +10,7 @@ deploymentTarget = "vm"
 build = ["sh", "-c", "CI=true pnpm install --frozen-lockfile && pnpm build"]
 # Replit's Publish flow manages production schema changes.
 run = ["sh", "-c", "pnpm start:with-worker"]
+ignorePorts = false
 
 [nix]
 channel = "stable-25_05"
