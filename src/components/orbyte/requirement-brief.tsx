@@ -36,6 +36,7 @@ import {
 	followUpResolved,
 	type ItemView,
 	isAnswered,
+	needsQuantity,
 	type Question,
 } from "#/lib/intake";
 import { clock } from "#/lib/time";
@@ -408,13 +409,13 @@ function ItemCard(props: {
 									"rounded px-1.5 py-0.5 text-xs tabular-nums",
 									props.open && "hover:bg-muted",
 									item.quantity === null &&
-										product.pricingMode === "fixed" &&
+										needsQuantity(product) &&
 										"bg-status-clarify/15 text-status-clarify",
 								)}
 							>
 								{item.quantity !== null
 									? `× ${item.quantity} ${fullProduct?.unit ?? ""}`
-									: product.pricingMode === "fixed"
+									: needsQuantity(product)
 										? "qty ?"
 										: "qty 1"}
 							</button>

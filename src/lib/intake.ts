@@ -23,7 +23,14 @@ export type IntakeProduct = {
 	pricingMode: "fixed" | "custom";
 	/** Switched off in Products: we tell the customer and don't ask about it. */
 	active?: boolean;
+	/** A custom item's price list; if it prices per piece, we ask how many. */
+	priceBuilder?: { components: { per: { kind: string } }[] } | null;
 };
+
+/** Fixed-price items always need a quantity; custom ones only if priced per piece. */
+export const needsQuantity = (p: IntakeProduct) =>
+	p.pricingMode === "fixed" ||
+	Boolean(p.priceBuilder?.components.some((c) => c.per.kind === "quantity"));
 
 export function emptyBrief(language: Language = "en"): Brief {
 	return {
@@ -235,7 +242,7 @@ export function assess(
 			continue;
 		}
 
-		if (product.pricingMode === "fixed") {
+		if (needsQuantity(product)) {
 			requiredTotal++;
 			if (item.quantity !== null && item.quantity > 0) requiredAnswered++;
 			else

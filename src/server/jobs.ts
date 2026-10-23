@@ -11,6 +11,7 @@ import type { BotAction, BotSource, Handover } from "#/db/schema";
 import { answerText } from "#/lib/intake";
 import { AI_MENTION, findMentions, withoutAiTag } from "#/lib/mentions";
 import { formatMYR } from "#/lib/money";
+import { chargeOf, chargeSuffix, totalWeeks } from "#/lib/quote-lines";
 import {
 	answerJobQuestion,
 	draftCustomerQuestion,
@@ -347,9 +348,25 @@ async function jobContext(jobId: string) {
 		quote: [
 			...quote.lineItems.map(
 				(l) =>
-					`${l.description} × ${l.quantity} ${l.unit} @ ${formatMYR(l.unitPriceSen)} = ${formatMYR(l.amountSen)}${l.notes ? ` (${l.notes})` : ""}`,
+					`${chargeOf(l) === "optional" ? "[Optional add-on, only if the customer takes it] " : ""}${l.description} × ${l.quantity} ${l.unit} @ ${formatMYR(l.unitPriceSen)} = ${formatMYR(l.amountSen)}${chargeSuffix[chargeOf(l)]}${l.notes ? ` (${l.notes})` : ""}`,
 			),
-			`Total ${formatMYR(quote.totalSen)}, quotation ${quote.number}, signed by ${quote.signerName ?? "customer"}`,
+			`Total ${formatMYR(quote.totalSen)} (one-time), quotation ${quote.number}, signed by ${quote.signerName ?? "customer"}`,
+			...(quote.terms?.phases.length
+				? [
+						`Timeline promised: ${quote.terms.phases.map((p) => `${p.name} ${p.weeks} wk`).join(" → ")} (about ${totalWeeks(quote.terms)} weeks)`,
+					]
+				: []),
+			...(quote.terms?.payments.length
+				? [
+						`Payment schedule: ${quote.terms.payments.map((p) => `${p.percent}% ${p.label}`).join(", ")}`,
+					]
+				: []),
+			...(quote.terms?.assumptions.length
+				? [`Assumptions: ${quote.terms.assumptions.join("; ")}`]
+				: []),
+			...(quote.terms?.exclusions.length
+				? [`Not included: ${quote.terms.exclusions.join("; ")}`]
+				: []),
 			...(quote.notes ? [`Notes on quote: ${quote.notes}`] : []),
 		],
 		files: messages

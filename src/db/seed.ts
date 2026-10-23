@@ -2,6 +2,7 @@
  * Resets the database to the synthetic demo data.
  * Run with: pnpm db:seed
  */
+import { demoPriceLists } from "#/data/demo-price-lists";
 import { type DemoQuestion, demoBusinesses } from "../data/demo";
 import { demoKnowledge } from "../data/demo-knowledge";
 import { getDb, schema } from "./index";
@@ -62,6 +63,7 @@ async function main() {
 				b.products.map(({ questions: _q, restockInDays, ...p }) => ({
 					...p,
 					businessId: b.id,
+					priceBuilder: demoPriceLists[p.id] ?? null,
 					restockDate:
 						restockInDays === undefined
 							? null

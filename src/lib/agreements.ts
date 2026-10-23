@@ -74,6 +74,7 @@ export function quoteReviewToken(quote: {
 	requirementVersion: number | null;
 	lineItems: unknown;
 	notes: string | null;
+	terms?: unknown;
 	totalSen: number;
 	status: string;
 }) {
@@ -81,6 +82,7 @@ export function quoteReviewToken(quote: {
 		version: quote.requirementVersion,
 		lines: quote.lineItems,
 		notes: quote.notes,
+		terms: quote.terms ?? null,
 		total: quote.totalSen,
 		status: quote.status,
 	});

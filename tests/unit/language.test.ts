@@ -26,3 +26,12 @@ test("real sentences decide the language", () => {
 	])
 		assert.equal(hasClearLanguage(t), true, t);
 });
+
+test("product ids from the AI may be SKUs in any case", async () => {
+	const { resolveProductId } = await import("../../src/server/workflow");
+	const products = [{ id: "kd-mobile-app", sku: "KD-APP-MOBILE" }];
+	assert.equal(resolveProductId("kd-mobile-app", products), "kd-mobile-app");
+	assert.equal(resolveProductId("kd-app-mobile", products), "kd-mobile-app");
+	assert.equal(resolveProductId("KD-APP-MOBILE", products), "kd-mobile-app");
+	assert.equal(resolveProductId("kd-mobile", products), null);
+});

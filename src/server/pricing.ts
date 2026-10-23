@@ -7,11 +7,15 @@ import type {
 	Brief,
 	Flag,
 	LineItem,
+	PriceBuilder,
 	PricingRuleConfig,
+	QuoteTerms,
 } from "#/db/schema";
 import { availableStock, formatDay, upcomingRestock } from "#/lib/availability";
 import { isVisible, type Question, questionsFor } from "#/lib/intake";
 import { formatMYR } from "#/lib/money";
+import { priceWithBuilder, termsFrom } from "#/lib/price-builder";
+import { totals } from "#/lib/quote-lines";
 
 export type CatalogProduct = {
 	id: string;
@@ -27,6 +31,18 @@ export type CatalogProduct = {
 	restockDate?: string | null;
 	/** Switched off in Products: not available, so staff decide. */
 	active?: boolean;
+	/** Custom-priced items: the business's price list. */
+	priceBuilder?: PriceBuilder | null;
+};
+
+/** A custom item the AI may top up with estimates (effort × the business's rate). */
+export type EstimateGap = {
+	itemIndex: number;
+	productId: string;
+	rate: NonNullable<PriceBuilder["rate"]>;
+	/** What the price list already covers, so the AI doesn't double-count. */
+	covered: string[];
+	unpriced: string[];
 };
 
 export { availableStock };
@@ -44,6 +60,10 @@ export type PricingResult = {
 	lineItems: LineItem[];
 	/** How each line was worked out, in plain words. */
 	explain: { itemIndex: number; lines: string[] }[];
+	/** Timeline and payment terms from the first custom item's price list. */
+	terms: QuoteTerms | null;
+	/** Custom items whose price list allows AI estimates for what it doesn't cover. */
+	gaps: EstimateGap[];
 };
 
 function rulesFor(rules: CatalogRule[], productId: string) {
@@ -91,6 +111,9 @@ export function priceBrief(
 	const flags: Flag[] = [];
 	const lineItems: LineItem[] = [];
 	const explain: PricingResult["explain"] = [];
+	const gaps: EstimateGap[] = [];
+	let terms: QuoteTerms | null = null;
+	const several = brief.items.length > 1;
 
 	brief.items.forEach((item, itemIndex) => {
 		const product = item.productId ? byId.get(item.productId) : undefined;
@@ -121,6 +144,46 @@ export function priceBrief(
 
 		const details = lineDetails(product, item.answers, questions);
 		const description = details ? `${product.name} (${details})` : product.name;
+
+		const builder = product.priceBuilder;
+		if (product.pricingMode === "custom" && builder?.components.length) {
+			const built = priceWithBuilder({
+				product,
+				builder,
+				item,
+				general: brief.general,
+				labelPrefix: several ? product.name : undefined,
+			});
+			lineItems.push(...built.lines);
+			terms ??= termsFrom(builder, built.weeks);
+			if (builder.rate)
+				gaps.push({
+					itemIndex,
+					productId: product.id,
+					rate: builder.rate,
+					covered: built.lines.map((l) => l.description),
+					unpriced: built.unpriced,
+				});
+			flags.push({
+				kind: "custom_pricing",
+				itemIndex,
+				message: `${product.name}: drafted from the price list${
+					built.unpriced.length
+						? `; couldn't price ${built.unpriced.join(", ")}`
+						: ""
+				}. Check before sending.`,
+			});
+			explain.push({
+				itemIndex,
+				lines: [
+					`${product.name}: priced from the business's price list`,
+					...built.log,
+					...built.unpriced.map((u) => `Not priced: ${u}`),
+					...(built.weeks ? [`Adds ${built.weeks} weeks of work`] : []),
+				],
+			});
+			return;
+		}
 
 		if (product.pricingMode === "custom") {
 			const qty = item.quantity && item.quantity > 0 ? item.quantity : 1;
@@ -278,19 +341,11 @@ export function priceBrief(
 		flags,
 		lineItems,
 		explain,
+		terms,
+		gaps,
 	};
 }
 
-export function totals(
-	lineItems: LineItem[],
-	sstRateBps: number,
-	sstRegistered: boolean,
-) {
-	const subtotalSen = lineItems.reduce((sum, l) => sum + l.amountSen, 0);
-	const sstSen = sstRegistered
-		? Math.round((subtotalSen * sstRateBps) / 10000)
-		: 0;
-	return { subtotalSen, sstSen, totalSen: subtotalSen + sstSen };
-}
+export { totals };
 
 export { formatMYR };

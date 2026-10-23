@@ -34,6 +34,7 @@ import {
 	KindChip,
 } from "#/components/orbyte/job-bits";
 import { useWorkspace } from "#/components/orbyte/workspace";
+import { QuoteTermsView } from "#/components/quote-document";
 import { Button } from "#/components/ui/button";
 import {
 	Dialog,
@@ -61,6 +62,7 @@ import {
 	mentionsAi,
 } from "#/lib/mentions";
 import { formatMYR } from "#/lib/money";
+import { chargeOf, chargeSuffix, hasTerms } from "#/lib/quote-lines";
 import { clock, dayLabel, initials } from "#/lib/time";
 import type { JobDetail } from "#/lib/types";
 import { cn } from "#/lib/utils";
@@ -891,8 +893,11 @@ function QuoteTab({
 								<td className="px-2 py-2 text-right tabular-nums">
 									{l.quantity} {l.unit}
 								</td>
-								<td className="px-4 py-2 text-right tabular-nums">
+								<td className="px-4 py-2 text-right whitespace-nowrap tabular-nums">
 									{formatMYR(l.amountSen)}
+									{chargeOf(l) === "optional"
+										? " (optional)"
+										: chargeSuffix[chargeOf(l)]}
 								</td>
 							</tr>
 						))}
@@ -900,7 +905,7 @@ function QuoteTab({
 					<tfoot className="text-sm">
 						<tr className="border-t">
 							<td colSpan={2} className="px-4 py-2 text-right font-semibold">
-								Total (incl. SST)
+								One-time total (incl. SST)
 							</td>
 							<td className="px-4 py-2 text-right font-semibold tabular-nums">
 								{formatMYR(q.totalSen)}
@@ -908,6 +913,11 @@ function QuoteTab({
 						</tr>
 					</tfoot>
 				</table>
+				{hasTerms(q.terms) && (
+					<div className="border-t px-4 pb-4">
+						<QuoteTermsView terms={q.terms} totalSen={q.totalSen} />
+					</div>
+				)}
 				{q.notes && (
 					<p className="border-t px-4 py-2 text-sm">Notes: {q.notes}</p>
 				)}

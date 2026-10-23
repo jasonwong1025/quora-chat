@@ -1,6 +1,14 @@
 import { quoteBadge, StatusBadge } from "#/components/status-badge";
 import { agreementLines } from "#/lib/agreements";
 import { formatMYR } from "#/lib/money";
+import {
+	chargeLabel,
+	chargeSuffix,
+	groupLines,
+	hasTerms,
+	paymentAmounts,
+	totalWeeks,
+} from "#/lib/quote-lines";
 import type { QuoteDetail } from "#/lib/types";
 
 /** The quotation as the customer sees it (web view of the PDF). */
@@ -47,56 +55,74 @@ export function QuoteDocument({ q }: { q: QuoteDetail }) {
 				</div>
 			</div>
 
-			<div className="mt-8 overflow-x-auto">
-				<table className="w-full text-sm">
-					<thead>
-						<tr className="border-b text-left text-muted-foreground">
-							<th className="py-2 font-medium">Description</th>
-							<th className="py-2 text-right font-medium">Qty</th>
-							<th className="py-2 text-right font-medium">Unit price</th>
-							<th className="py-2 text-right font-medium">Amount</th>
-						</tr>
-					</thead>
-					<tbody>
-						{q.lineItems.map((l, i) => (
-							<tr key={`${i}-${l.description}`} className="border-b align-top">
-								<td className="py-2 pr-2">
-									{l.description}
-									{l.notes && (
-										<p className="text-xs text-muted-foreground">{l.notes}</p>
-									)}
-								</td>
-								<td className="py-2 text-right whitespace-nowrap">
-									{l.quantity} {l.unit}
-								</td>
-								<td className="py-2 pl-2 text-right tabular-nums">
-									{formatMYR(l.unitPriceSen)}
-								</td>
-								<td className="py-2 pl-2 text-right tabular-nums">
-									{formatMYR(l.amountSen)}
-								</td>
+			{groupLines(q.lineItems).map((group) => (
+				<div key={group.charge} className="mt-8 overflow-x-auto">
+					{group.charge !== "one_time" && (
+						<h2 className="mb-1 text-sm font-semibold">
+							{group.charge === "optional"
+								? "Optional add-ons (not included in the total)"
+								: `${chargeLabel[group.charge]} fees (not included in the total)`}
+						</h2>
+					)}
+					<table className="w-full text-sm">
+						<thead>
+							<tr className="border-b text-left text-muted-foreground">
+								<th className="py-2 font-medium">Description</th>
+								<th className="py-2 text-right font-medium">Qty</th>
+								<th className="py-2 text-right font-medium">Unit price</th>
+								<th className="py-2 text-right font-medium">Amount</th>
 							</tr>
-						))}
-					</tbody>
-				</table>
-			</div>
+						</thead>
+						<tbody>
+							{group.lines.map(({ line: l, index }) => (
+								<tr
+									key={`${index}-${l.description}`}
+									className="border-b align-top"
+								>
+									<td className="py-2 pr-2">
+										{l.description}
+										{l.notes && (
+											<p className="text-xs text-muted-foreground">{l.notes}</p>
+										)}
+									</td>
+									<td className="py-2 text-right whitespace-nowrap">
+										{l.quantity} {l.unit}
+									</td>
+									<td className="py-2 pl-2 text-right tabular-nums">
+										{formatMYR(l.unitPriceSen)}
+									</td>
+									<td className="py-2 pl-2 text-right whitespace-nowrap tabular-nums">
+										{formatMYR(l.amountSen)}
+										{chargeSuffix[group.charge]}
+									</td>
+								</tr>
+							))}
+						</tbody>
+					</table>
+					{group.charge === "one_time" && (
+						<dl className="mt-4 ml-auto w-full max-w-64 space-y-1 text-sm">
+							<div className="flex justify-between text-muted-foreground">
+								<dt>Subtotal</dt>
+								<dd className="tabular-nums">{formatMYR(q.subtotalSen)}</dd>
+							</div>
+							{business?.sstRegistered && (
+								<div className="flex justify-between text-muted-foreground">
+									<dt>SST ({business.sstRateBps / 100}%)</dt>
+									<dd className="tabular-nums">{formatMYR(q.sstSen)}</dd>
+								</div>
+							)}
+							<div className="flex justify-between border-t pt-1 text-base font-semibold">
+								<dt>Total</dt>
+								<dd className="tabular-nums">{formatMYR(q.totalSen)}</dd>
+							</div>
+						</dl>
+					)}
+				</div>
+			))}
 
-			<dl className="mt-4 ml-auto w-full max-w-64 space-y-1 text-sm">
-				<div className="flex justify-between text-muted-foreground">
-					<dt>Subtotal</dt>
-					<dd className="tabular-nums">{formatMYR(q.subtotalSen)}</dd>
-				</div>
-				{business?.sstRegistered && (
-					<div className="flex justify-between text-muted-foreground">
-						<dt>SST ({business.sstRateBps / 100}%)</dt>
-						<dd className="tabular-nums">{formatMYR(q.sstSen)}</dd>
-					</div>
-				)}
-				<div className="flex justify-between border-t pt-1 text-base font-semibold">
-					<dt>Total</dt>
-					<dd className="tabular-nums">{formatMYR(q.totalSen)}</dd>
-				</div>
-			</dl>
+			{hasTerms(q.terms) && (
+				<QuoteTermsView terms={q.terms} totalSen={q.totalSen} />
+			)}
 
 			{q.notes && (
 				<section className="mt-8 text-sm">
@@ -139,5 +165,76 @@ export function QuoteDocument({ q }: { q: QuoteDetail }) {
 				business or tax invoice.
 			</p>
 		</article>
+	);
+}
+
+/** Timeline, payment schedule, and what is and isn't included. */
+export function QuoteTermsView({
+	terms,
+	totalSen,
+}: {
+	terms: NonNullable<QuoteDetail["terms"]>;
+	totalSen: number;
+}) {
+	return (
+		<section className="mt-8 grid gap-6 border-t pt-4 text-sm sm:grid-cols-2">
+			{terms.phases.length > 0 && (
+				<div>
+					<h2 className="font-semibold">
+						Timeline · about {totalWeeks(terms)} weeks
+					</h2>
+					<ol className="mt-2 space-y-1">
+						{terms.phases.map((p, i) => (
+							<li key={`${i}-${p.name}`} className="flex justify-between gap-2">
+								<span>
+									{i + 1}. {p.name}
+								</span>
+								<span className="text-muted-foreground tabular-nums">
+									{p.weeks} {p.weeks === 1 ? "week" : "weeks"}
+								</span>
+							</li>
+						))}
+					</ol>
+				</div>
+			)}
+			{terms.payments.length > 0 && (
+				<div>
+					<h2 className="font-semibold">Payment schedule</h2>
+					<ul className="mt-2 space-y-1">
+						{paymentAmounts(terms, totalSen).map((p, i) => (
+							<li
+								key={`${i}-${p.label}`}
+								className="flex justify-between gap-2"
+							>
+								<span>
+									{p.percent}% {p.label}
+								</span>
+								<span className="tabular-nums">{formatMYR(p.amountSen)}</span>
+							</li>
+						))}
+					</ul>
+				</div>
+			)}
+			{terms.assumptions.length > 0 && (
+				<div>
+					<h2 className="font-semibold">Assumptions</h2>
+					<ul className="mt-2 list-disc space-y-1 pl-5 text-muted-foreground">
+						{terms.assumptions.map((a) => (
+							<li key={a}>{a}</li>
+						))}
+					</ul>
+				</div>
+			)}
+			{terms.exclusions.length > 0 && (
+				<div>
+					<h2 className="font-semibold">Not included</h2>
+					<ul className="mt-2 list-disc space-y-1 pl-5 text-muted-foreground">
+						{terms.exclusions.map((a) => (
+							<li key={a}>{a}</li>
+						))}
+					</ul>
+				</div>
+			)}
+		</section>
 	);
 }

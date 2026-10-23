@@ -26,10 +26,12 @@ import type {
 	BriefItem,
 	Language,
 	LineItem,
+	QuoteTerms,
 	ThoughtStep,
 } from "#/db/schema";
 import {
 	agreementContent,
+	agreementLines,
 	quoteAgreementIssue,
 	quoteReviewToken,
 } from "#/lib/agreements";
@@ -54,11 +56,14 @@ import {
 	type Question,
 	questionsFor,
 } from "#/lib/intake";
+import { addWeeks } from "#/lib/price-builder";
+import { sumOf } from "#/lib/quote-lines";
 import {
 	type Ask,
 	aiModelName,
 	type CatalogQuestion,
 	type ChatTurn,
+	estimateGaps,
 	type Reading,
 	type ReplyPlan,
 	readTurn,
@@ -263,6 +268,7 @@ const intakeProducts = (products: Catalog["products"]): IntakeProduct[] =>
 		unit: p.unit,
 		pricingMode: p.pricingMode,
 		active: p.active,
+		priceBuilder: p.priceBuilder,
 	}));
 
 /** A few things we do, for "what are you looking for?" (available ones only). */
@@ -296,6 +302,25 @@ const sameValues = (a: string[], b: string[]) =>
 	a.every((v, i) => v.trim().toLowerCase() === b[i]?.trim().toLowerCase());
 
 /**
+ * The catalog shows the model both ids and SKUs, and it sometimes answers with
+ * the SKU ("KD-APP-MOBILE" or "kd-app-mobile") instead of the id. Accept either.
+ */
+export function resolveProductId(
+	ref: string | null,
+	products: { id: string; sku: string }[],
+) {
+	if (!ref) return null;
+	const want = ref.trim().toLowerCase();
+	return (
+		products.find((p) => p.id === ref)?.id ??
+		products.find(
+			(p) => p.id.toLowerCase() === want || p.sku.toLowerCase() === want,
+		)?.id ??
+		null
+	);
+}
+
+/**
  * Merges what the AI read into the brief. Answers it leaves out are kept,
  * and only keys the business actually asks about are accepted.
  */
@@ -314,7 +339,6 @@ function applyReading(
 	next.reasoning = reading.reasoning;
 
 	const productById = new Map(catalog.products.map((p) => [p.id, p]));
-	const known = new Set(catalog.products.map((p) => p.id));
 
 	const mergeAnswers = (
 		target: Record<string, Answer>,
@@ -383,9 +407,11 @@ function applyReading(
 			continue;
 		}
 		if (r.removed) continue;
-		const productId =
-			r.productId && known.has(r.productId) ? r.productId : null;
-		const candidates = r.candidateProductIds.filter((id) => known.has(id));
+		const productId = resolveProductId(r.productId, catalog.products);
+		const candidates = r.candidateProductIds.flatMap((id) => {
+			const found = resolveProductId(id, catalog.products);
+			return found ? [found] : [];
+		});
 		const match: BriefItem["match"] =
 			r.match === "exact" && !productId ? "none" : r.match;
 		// A question ("berapa harga?", "what file should I send?") is not something
@@ -599,6 +625,7 @@ async function upsertDraftQuote(
 	revisionOf: string | null | undefined,
 	products: IntakeProduct[],
 	questions: Question[],
+	terms: QuoteTerms | null = null,
 ) {
 	return getDb().transaction(async (db) => {
 		const requestId = request.id;
@@ -635,6 +662,7 @@ async function upsertDraftQuote(
 				.update(schema.quotes)
 				.set({
 					lineItems,
+					terms,
 					...t,
 					validUntil,
 					requirementVersion: current.briefVersion,
@@ -668,6 +696,7 @@ async function upsertDraftQuote(
 				requirementVersion: current.briefVersion,
 				requirementsSnapshot: snapshot,
 				lineItems,
+				terms,
 				...t,
 				validUntil,
 			})
@@ -849,6 +878,40 @@ async function advanceRequest(a: Advance): Promise<{
 				: asks.map((m) => describeMissing(m)),
 	});
 
+	// Write the customer's reply while the draft is priced: AI estimates for custom
+	// items can take a while, and the reply doesn't depend on the numbers.
+	// Staff drafting doesn't message the customer; they'll see the quote when it's sent.
+	const notOffered = brief.items
+		.filter((i) => i.match === "none")
+		.map((i) => i.rawText);
+	const replying: Promise<string | null> = a.forceDraft
+		? Promise.resolve(null)
+		: (async () => {
+				try {
+					return (
+						(await writeReply({
+							business,
+							customerName: a.conversation.customerName,
+							language: brief.language,
+							plan,
+							customerQuestion: a.customerQuestion,
+							knowledge: await publicFaq(
+								business.id,
+								a.customerQuestion,
+								a.run,
+							),
+							notOffered,
+							// The recap already carries the note next to the item.
+							availability: plan.stage === "confirming" ? [] : fresh,
+							history: a.history,
+							firstReply: !a.history.some((m) => m.sender !== "customer"),
+						})) || fallbackReply(brief.language)
+					);
+				} catch {
+					return fallbackReply(brief.language);
+				}
+			})();
+
 	// Remember what we asked, so optional questions are asked only once.
 	const asked = new Set(brief.asked);
 	for (const m of asks) asked.add(m.id);
@@ -881,13 +944,15 @@ async function advanceRequest(a: Advance): Promise<{
 			"Updated customer requirements",
 			request.status,
 		);
+		const estimated = await estimateCustomGaps(a, result);
 		const quote = await upsertDraftQuote(
 			saved,
 			business,
-			result.lineItems,
+			[...result.lineItems, ...estimated.lines],
 			brief.revisionOf,
 			products,
 			catalog.questions,
+			addWeeks(result.terms, estimated.weeks),
 		);
 		if (result.lineItems.length) {
 			await run.add({
@@ -895,7 +960,10 @@ async function advanceRequest(a: Advance): Promise<{
 				title: `Drafted ${quote.number}: ${formatMYR(quote.totalSen)} incl. SST`,
 				detail: [
 					...result.explain.flatMap((e) => e.lines),
-					"Prices come from the pricing engine, not the AI.",
+					...estimated.log,
+					estimated.lines.length
+						? "Price-list parts come from the business; AI estimates are effort × the business's rate and need checking."
+						: "Prices come from the pricing engine, not the AI.",
 				],
 			});
 		}
@@ -974,27 +1042,75 @@ async function advanceRequest(a: Advance): Promise<{
 
 	if (fresh.length) await tellStaffAboutAvailability(a, fresh);
 
-	// Staff drafting doesn't message the customer; they'll see the quote when it's sent.
-	if (a.forceDraft) return { status, reply: null };
+	return { status, reply: await replying };
+}
 
-	const notOffered = brief.items
-		.filter((i) => i.match === "none")
-		.map((i) => i.rawText);
-	const reply =
-		(await writeReply({
-			business,
-			customerName: a.conversation.customerName,
-			language: brief.language,
-			plan,
-			customerQuestion: a.customerQuestion,
-			knowledge: await publicFaq(business.id, a.customerQuestion, a.run),
-			notOffered,
-			// The recap already carries the note next to the item.
-			availability: plan.stage === "confirming" ? [] : fresh,
-			history: a.history,
-			firstReply: !a.history.some((m) => m.sender !== "customer"),
-		}).catch(() => "")) || fallbackReply(brief.language);
-	return { status, reply };
+/**
+ * Custom items: what the customer asked for that the price list doesn't cover,
+ * estimated by the AI as effort × the business's rate. Never fails the draft.
+ */
+async function estimateCustomGaps(
+	a: Advance,
+	result: ReturnType<typeof priceBrief>,
+): Promise<{ lines: LineItem[]; weeks: number; log: string[] }> {
+	const out = { lines: [] as LineItem[], weeks: 0, log: [] as string[] };
+	if (!result.gaps.length) return out;
+	const { business, products } = a.catalog;
+	// The brief plus the customer's own words: details no question covers
+	// (e.g. "we also deal in USD") still shape the scope.
+	const requirements = [
+		...(a.brief.summary ? [a.brief.summary] : []),
+		...agreementLines(a.brief),
+		...a.history
+			.filter((m) => m.sender === "customer" && m.body.trim())
+			.slice(-15)
+			.map((m) => `Customer said: "${m.body.trim().slice(0, 600)}"`),
+	];
+	const several = a.brief.items.length > 1;
+	await Promise.all(
+		result.gaps.map(async (gap) => {
+			const product = products.find((p) => p.id === gap.productId);
+			if (!product) return;
+			try {
+				const found = await estimateGaps({
+					businessName: business.name,
+					industry: business.industry,
+					productName: product.name,
+					requirements,
+					covered: gap.covered,
+					unpriced: gap.unpriced,
+					rateUnit: gap.rate.unit,
+				});
+				for (const g of found) {
+					const quantity = Math.max(1, Math.round(g.effort));
+					out.lines.push({
+						productId: product.id,
+						description: several ? `${product.name}: ${g.label}` : g.label,
+						quantity,
+						unit: gap.rate.unit,
+						unitPriceSen: gap.rate.amountSen,
+						amountSen: quantity * gap.rate.amountSen,
+						charge: "one_time",
+						source: "ai_estimate",
+						estimate: { reasoning: g.reasoning },
+					});
+					out.weeks += g.weeks;
+					out.log.push(
+						`AI estimate — ${g.label}: ${quantity} ${gap.rate.unit}s × ${formatMYR(gap.rate.amountSen)} = ${formatMYR(quantity * gap.rate.amountSen)} (${g.reasoning})`,
+					);
+				}
+				if (!found.length)
+					out.log.push(
+						`${product.name}: the price list covers everything asked`,
+					);
+			} catch (error) {
+				out.log.push(
+					`${product.name}: couldn't estimate extra work (${error instanceof Error ? error.message : String(error)}); staff to check`,
+				);
+			}
+		}),
+	);
+	return out;
 }
 
 /** Staff hear about it at the same time as the customer, so they can step in. */
@@ -1952,6 +2068,8 @@ export async function editDraftQuote(input: {
 	staffId: string;
 	lineItems: LineItem[];
 	notes: string | null;
+	/** Undefined keeps the current timeline and terms. */
+	terms?: QuoteTerms | null;
 	reviewToken: string;
 }) {
 	return getDb().transaction(async (db) => {
@@ -2017,6 +2135,7 @@ export async function editDraftQuote(input: {
 			.set({
 				lineItems,
 				notes: input.notes,
+				...(input.terms !== undefined ? { terms: input.terms } : {}),
 				...totals(lineItems, business.sstRateBps, business.sstRegistered),
 			})
 			.where(eq(schema.quotes.id, quote.id))
@@ -2040,8 +2159,22 @@ function quoteMessage(input: {
 	validUntil: string;
 	sst: boolean;
 	revision: boolean;
+	/** "RM 1,450.00 / month" etc.; recurring fees sit outside the total. */
+	recurring: { monthly: string | null; yearly: string | null };
 }) {
-	const { name, number, total, validUntil } = input;
+	const { name, number, validUntil } = input;
+	const per = {
+		en: { month: "month", year: "year" },
+		ms: { month: "bulan", year: "tahun" },
+		zh: { month: "月", year: "年" },
+	}[input.language === "mixed" ? "en" : input.language];
+	const plus = [
+		input.recurring.monthly && `${input.recurring.monthly} / ${per.month}`,
+		input.recurring.yearly && `${input.recurring.yearly} / ${per.year}`,
+	]
+		.filter(Boolean)
+		.join(" + ");
+	const total = plus ? `${input.total} + ${plus}` : input.total;
 	switch (input.language) {
 		case "ms":
 			return `Hi ${name}, ini ${input.revision ? "sebut harga yang dikemas kini" : "sebut harga"} ${number} 👇\nJumlah: ${total}${input.sst ? " (termasuk SST)" : ""}\nSah sehingga ${validUntil}\n\nBoleh semak dulu, kalau ok tekan "Review & sign" ya. Ada soalan, tanya je kat sini.`;
@@ -2306,6 +2439,14 @@ export async function decideQuote(input: {
 					}),
 					sst: Boolean(business?.sstRegistered),
 					revision: quote.revision > 1,
+					recurring: {
+						monthly: sumOf(quote.lineItems, "monthly")
+							? formatMYR(sumOf(quote.lineItems, "monthly"))
+							: null,
+						yearly: sumOf(quote.lineItems, "yearly")
+							? formatMYR(sumOf(quote.lineItems, "yearly"))
+							: null,
+					},
 				}),
 				quoteId: quote.id,
 			});

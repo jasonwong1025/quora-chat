@@ -560,6 +560,178 @@ Rules:
 	return result.questions;
 }
 
+// --- Custom pricing --------------------------------------------------------------------
+
+const charges = ["one_time", "monthly", "yearly", "optional"] as const;
+
+const builderSchema = z.object({
+	rate: z
+		.object({ amount: z.number().nonnegative(), unit: z.enum(["hour", "day"]) })
+		.nullable(),
+	components: z.array(
+		z.object({
+			label: z.string(),
+			charge: z.enum(charges),
+			whenKey: z.string().nullable(),
+			whenEquals: z.string().nullable(),
+			amount: z.number().nonnegative(),
+			per: z.enum(["fixed", "quantity", "answer"]),
+			perKey: z.string().nullable(),
+			perUnit: z.string().nullable(),
+			weeks: z.number().nonnegative().nullable(),
+			note: z.string().nullable(),
+		}),
+	),
+	phases: z.array(z.object({ name: z.string(), weeks: z.number().positive() })),
+	payments: z.array(z.object({ label: z.string(), percent: z.number() })),
+	assumptions: z.array(z.string()),
+	exclusions: z.array(z.string()),
+	newQuestions: suggestSchema.shape.questions,
+});
+
+export type DraftedBuilder = z.infer<typeof builderSchema>;
+
+const numOrNull = { type: ["number", "null"] } as const;
+const builderJsonSchema = obj({
+	rate: {
+		anyOf: [
+			obj({
+				amount: { type: "number" },
+				unit: { type: "string", enum: ["hour", "day"] },
+			}),
+			{ type: "null" },
+		],
+	},
+	components: {
+		type: "array",
+		items: obj({
+			label: str,
+			charge: { type: "string", enum: charges },
+			whenKey: strOrNull,
+			whenEquals: strOrNull,
+			amount: { type: "number" },
+			per: { type: "string", enum: ["fixed", "quantity", "answer"] },
+			perKey: strOrNull,
+			perUnit: strOrNull,
+			weeks: numOrNull,
+			note: strOrNull,
+		}),
+	},
+	phases: {
+		type: "array",
+		items: obj({ name: str, weeks: { type: "number" } }),
+	},
+	payments: {
+		type: "array",
+		items: obj({ label: str, percent: { type: "number" } }),
+	},
+	assumptions: strList,
+	exclusions: strList,
+	newQuestions: suggestJsonSchema.properties.questions,
+});
+
+/**
+ * Drafts a price list for a custom-priced item, shaped to the business's trade
+ * (a software house gets phases and hosting; an audit firm fee bands; a contractor
+ * materials and labour). Staff edit every number before it's used.
+ */
+export async function draftPriceBuilder(input: {
+	businessName: string;
+	industry: string;
+	product: {
+		name: string;
+		description: string;
+		category: string;
+		unit: string;
+	};
+	questions: { key: string; label: string; type: string; options: string[] }[];
+	otherProducts: string[];
+}): Promise<DraftedBuilder> {
+	if (isReplay())
+		throw new Error(
+			"Drafting a price list needs a live AI model; replay mode only covers the demo script.",
+		);
+	return structured(
+		"price_builder",
+		builderJsonSchema,
+		builderSchema,
+		`You help "${input.businessName}" (${input.industry}, Malaysia) set up a price list for a custom-priced item, so quotations can be drafted from the customer's answers. Staff will check and edit every number.
+
+The item: "${input.product.name}" (${input.product.description}; category ${input.product.category}; sold per ${input.product.unit}).
+Questions we already ask the customer (JSON): ${JSON.stringify(input.questions)}
+Other things the business sells (don't price these here; they're quoted separately): ${input.otherProducts.join(", ") || "none"}
+
+Build the price list the way this trade really quotes in Malaysia, with realistic small-business prices in RM:
+- components: the priced parts, 4-12 of them, most important first. Include a base/core part that always applies (whenKey null). Add parts that apply only for certain answers: whenKey = an existing question key (or one of your newQuestions), whenEquals = one of that question's exact options (for yes_no use "yes" or "no"). For multi-choice questions, one part per option that changes the price.
+- per: "fixed" (one amount), "quantity" (× the item quantity), or "answer" (× a number from an answer, e.g. per screen, per user, per sqft; perKey = that question's key, which must be a "number" or a "text" size like "4 x 10"; perUnit = the unit word, e.g. "screen", "sqft"). perKey/perUnit null otherwise.
+- charge: "one_time" for the work itself. Use "monthly"/"yearly" only where this trade really charges on a recurring basis (e.g. hosting, maintenance, retainers, licences, subscriptions). Use "optional" for useful extras the customer may add (not in the total). Don't force sections the trade doesn't use.
+- weeks: how much work a one-time part adds, only if this trade quotes a timeline; else null.
+- phases: the stages and base weeks shown on the quotation (e.g. design, build, testing, launch for software; planning, fieldwork, reporting for audit). Empty if this trade doesn't quote timelines.
+- payments: the usual payment schedule for this trade (e.g. 50% deposit, 50% on completion). Percents add up to 100. Empty if it's simply paid in full.
+- rate: the business's typical hourly or daily rate for work not on the list (e.g. software, design, consulting). null if this trade doesn't price by time.
+- assumptions and exclusions: 2-5 short lines each that protect the business (what's included, what's not). Plain English.
+- newQuestions: only questions the price list needs that aren't asked yet (same rules as preset questions: short label, snake_case key, the right type, options for choices). Usually 0-3. Never ask about budget or price. Never add a quantity / "how many pieces" question: the order quantity is asked separately, so price per piece with per "quantity" instead.
+- note: a short customer-facing clarification for a part, or null.
+- amount: in RM (not sen), per unit when per is "quantity" or "answer".`,
+		"Draft the price list.",
+		"medium",
+	);
+}
+
+const gapSchema = z.object({
+	lines: z.array(
+		z.object({
+			label: z.string(),
+			effort: z.number().positive(),
+			weeks: z.number().nonnegative(),
+			reasoning: z.string(),
+		}),
+	),
+});
+
+const gapJsonSchema = obj({
+	lines: {
+		type: "array",
+		items: obj({
+			label: str,
+			effort: { type: "number" },
+			weeks: { type: "number" },
+			reasoning: str,
+		}),
+	},
+});
+
+/**
+ * Requirements the price list doesn't cover, estimated as effort × the business's
+ * own rate. Code does the maths; staff check every estimate before sending.
+ */
+export async function estimateGaps(input: {
+	businessName: string;
+	industry: string;
+	productName: string;
+	requirements: string[];
+	covered: string[];
+	unpriced: string[];
+	rateUnit: "hour" | "day";
+}): Promise<z.infer<typeof gapSchema>["lines"]> {
+	if (isReplay()) return [];
+	const result = await structured(
+		"price_gaps",
+		gapJsonSchema,
+		gapSchema,
+		`You help "${input.businessName}" (${input.industry}, Malaysia) draft a quotation for "${input.productName}". Their price list already priced some parts. Your job: find requirements the customer asked for that NO priced part covers, and estimate the effort for each, in ${input.rateUnit}s. Our code multiplies by the business's own rate; you never give money amounts.
+
+Rules:
+- Only things the customer actually asked for or clearly needs for what they described. Nothing speculative, no "nice to have".
+- Never duplicate a part already priced (even if worded differently). If everything is covered, return no lines.
+- At most 5 lines. label: short and customer-friendly (e.g. "Loyalty points system").
+- effort: realistic for a small Malaysian business doing this work, in ${input.rateUnit}s. weeks: how much it adds to the timeline (0 if it runs alongside other work).
+- reasoning: one short sentence for our staff: what the customer asked and how you sized it.`,
+		`Customer's requirements:\n${input.requirements.map((r) => `- ${r}`).join("\n")}\n\nAlready priced:\n${input.covered.map((c) => `- ${c}`).join("\n") || "- nothing"}${input.unpriced.length ? `\n\nOn the list but missing a number (don't estimate these, staff will): ${input.unpriced.join("; ")}` : ""}`,
+	);
+	return result.lines.slice(0, 5);
+}
+
 // --- Handover to the PIC --------------------------------------------------------------
 
 /** Everything the business knows about one signed job, as plain text for the AI. */

@@ -1,13 +1,39 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { Check, ExternalLink, Loader2, Plus, Trash2, X } from "lucide-react";
+import {
+	Check,
+	ExternalLink,
+	ListChecks,
+	Loader2,
+	Plus,
+	Sparkles,
+	Trash2,
+	X,
+} from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
 import { Button } from "#/components/ui/button";
 import { Input } from "#/components/ui/input";
+import {
+	Select,
+	SelectContent,
+	SelectItem,
+	SelectTrigger,
+	SelectValue,
+} from "#/components/ui/select";
 import { Textarea } from "#/components/ui/textarea";
-import type { LineItem } from "#/db/schema";
+import type { Charge, LineItem, QuoteTerms } from "#/db/schema";
 import { quoteReviewToken } from "#/lib/agreements";
 import { formatMYR, parseMYR } from "#/lib/money";
+import {
+	chargeLabel,
+	chargeOf,
+	chargeSuffix,
+	groupLines,
+	hasTerms,
+	sumOf,
+	totals,
+	totalWeeks,
+} from "#/lib/quote-lines";
 import type { BusinessDetail, RequestRow, Staff } from "#/lib/types";
 import { orpc } from "#/orpc/client";
 
@@ -33,6 +59,7 @@ export function QuoteEditor(props: {
 	const queryClient = useQueryClient();
 	const [lines, setLines] = useState<LineItem[]>(quote.lineItems);
 	const [notes, setNotes] = useState(quote.notes ?? "");
+	const [terms, setTerms] = useState<QuoteTerms | null>(quote.terms ?? null);
 	const [dirty, setDirty] = useState(false);
 	// What staff are typing in each price box, so it isn't reformatted mid-keystroke.
 	const [priceText, setPriceText] = useState<Record<number, string>>({});
@@ -50,10 +77,30 @@ export function QuoteEditor(props: {
 	);
 
 	const editable = quote.status === "draft" && !props.onHold;
-	const subtotal = lines.reduce((s, l) => s + l.amountSen, 0);
-	const sst = business.sstRegistered
-		? Math.round((subtotal * business.sstRateBps) / 10000)
-		: 0;
+	const t = totals(lines, business.sstRateBps, business.sstRegistered);
+	const subtotal = t.subtotalSen;
+	const sst = t.sstSen;
+	const monthly = sumOf(lines, "monthly");
+	const yearly = sumOf(lines, "yearly");
+	const optional = sumOf(lines, "optional");
+	const estimates = lines.filter((l) => l.source === "ai_estimate").length;
+	const termsProblem =
+		terms?.payments.length &&
+		terms.payments.reduce((s, p) => s + p.percent, 0) !== 100
+			? "Payments must add up to 100%"
+			: null;
+
+	function patchTerms(change: Partial<QuoteTerms>) {
+		setDirty(true);
+		setTerms((t) => ({
+			phases: [],
+			payments: [],
+			assumptions: [],
+			exclusions: [],
+			...t,
+			...change,
+		}));
+	}
 
 	function patch(i: number, change: Partial<LineItem>) {
 		setDirty(true);
@@ -64,6 +111,11 @@ export function QuoteEditor(props: {
 				// Editing qty or price recalculates the amount (drops minimum-charge adjustments).
 				if ("quantity" in change || "unitPriceSen" in change) {
 					next.amountSen = next.unitPriceSen * next.quantity;
+					// Staff have now set this number themselves: no longer an AI estimate.
+					if (next.source === "ai_estimate") {
+						delete next.source;
+						delete next.estimate;
+					}
 				}
 				return next;
 			}),
@@ -75,11 +127,27 @@ export function QuoteEditor(props: {
 			toast.error("Choose who you are acting as first");
 			return;
 		}
+		if (termsProblem) {
+			toast.error(termsProblem);
+			return;
+		}
+		const cleanTerms =
+			terms && hasTerms(terms)
+				? {
+						phases: terms.phases.filter((p) => p.name.trim() && p.weeks > 0),
+						payments: terms.payments.filter(
+							(p) => p.label.trim() && p.percent > 0,
+						),
+						assumptions: terms.assumptions.map((a) => a.trim()).filter(Boolean),
+						exclusions: terms.exclusions.map((a) => a.trim()).filter(Boolean),
+					}
+				: null;
 		const saved = await update.mutateAsync({
 			quoteId: quote.id,
 			staffId: actingAs.id,
 			lineItems: lines,
 			notes: notes.trim() || null,
+			terms: cleanTerms,
 			reviewToken: quoteReviewToken(quote),
 		});
 		setDirty(false);
@@ -141,12 +209,49 @@ export function QuoteEditor(props: {
 					{lines.map((l, i) => (
 						<li key={`${quote.id}-${i}`} className="space-y-2 px-3 py-2.5">
 							<div>
-								<Input
-									aria-label={`Line ${i + 1} description`}
-									value={l.description}
-									onChange={(e) => patch(i, { description: e.target.value })}
-									className="h-8"
-								/>
+								<div className="flex gap-2">
+									<Input
+										aria-label={`Line ${i + 1} description`}
+										value={l.description}
+										onChange={(e) => patch(i, { description: e.target.value })}
+										className="h-8 min-w-0 flex-1"
+									/>
+									<Select
+										value={chargeOf(l)}
+										onValueChange={(v) => patch(i, { charge: v as Charge })}
+									>
+										<SelectTrigger
+											size="sm"
+											className="w-32 shrink-0"
+											aria-label={`Line ${i + 1} charged`}
+										>
+											<SelectValue />
+										</SelectTrigger>
+										<SelectContent position="popper">
+											{(Object.keys(chargeLabel) as Charge[]).map((c) => (
+												<SelectItem key={c} value={c}>
+													{chargeLabel[c]}
+												</SelectItem>
+											))}
+										</SelectContent>
+									</Select>
+								</div>
+								{l.source === "ai_estimate" && (
+									<p className="mt-1 flex items-start gap-1.5 rounded bg-status-review/10 px-2 py-1 text-xs">
+										<Sparkles className="mt-0.5 size-3 shrink-0 text-status-review" />
+										<span>
+											<span className="font-medium">
+												AI estimate, please check.
+											</span>{" "}
+											{l.estimate?.reasoning}
+										</span>
+									</p>
+								)}
+								{l.source === "builder" && (
+									<p className="mt-1 flex items-center gap-1 text-[11px] text-muted-foreground">
+										<ListChecks className="size-3" /> From the price list
+									</p>
+								)}
 								{l.notes && (
 									<p className="mt-1 text-xs text-muted-foreground">
 										{l.notes}
@@ -194,6 +299,7 @@ export function QuoteEditor(props: {
 									<span className="text-xs text-muted-foreground">Amount</span>
 									<p className="flex h-8 items-center justify-end text-sm font-medium whitespace-nowrap tabular-nums">
 										{formatMYR(l.amountSen)}
+										{chargeSuffix[chargeOf(l)]}
 									</p>
 								</div>
 								<Button
@@ -229,30 +335,42 @@ export function QuoteEditor(props: {
 							</tr>
 						</thead>
 						<tbody>
-							{lines.map((l, i) => (
-								<tr
-									key={`${quote.id}-${i}`}
-									className="border-b align-top last:border-0"
-								>
-									<td className="px-3 py-1.5">
-										{l.description}
-										{l.notes && (
-											<p className="mt-0.5 text-xs text-muted-foreground">
-												{l.notes}
-											</p>
-										)}
-									</td>
-									<td className="px-1 py-1.5 text-right whitespace-nowrap">
-										{l.quantity} {l.unit}
-									</td>
-									<td className="px-1 py-1.5 text-right whitespace-nowrap tabular-nums">
-										{formatMYR(l.unitPriceSen)}
-									</td>
-									<td className="px-3 py-1.5 text-right whitespace-nowrap tabular-nums">
-										{formatMYR(l.amountSen)}
-									</td>
-								</tr>
-							))}
+							{groupLines(lines).flatMap((group) => [
+								group.charge === "one_time" ? null : (
+									<tr key={group.charge} className="border-b bg-muted/40">
+										<td colSpan={4} className="px-3 py-1 text-xs font-medium">
+											{group.charge === "optional"
+												? "Optional add-ons (not in total)"
+												: `${chargeLabel[group.charge]} (not in total)`}
+										</td>
+									</tr>
+								),
+								...group.lines.map(({ line: l, index: i }) => (
+									<tr
+										key={`${quote.id}-${i}`}
+										className="border-b align-top last:border-0"
+									>
+										<td className="px-3 py-1.5">
+											{l.description}
+											{l.notes && (
+												<p className="mt-0.5 text-xs text-muted-foreground">
+													{l.notes}
+												</p>
+											)}
+										</td>
+										<td className="px-1 py-1.5 text-right whitespace-nowrap">
+											{l.quantity} {l.unit}
+										</td>
+										<td className="px-1 py-1.5 text-right whitespace-nowrap tabular-nums">
+											{formatMYR(l.unitPriceSen)}
+										</td>
+										<td className="px-3 py-1.5 text-right whitespace-nowrap tabular-nums">
+											{formatMYR(l.amountSen)}
+											{chargeSuffix[group.charge]}
+										</td>
+									</tr>
+								)),
+							])}
 						</tbody>
 					</table>
 				</div>
@@ -292,7 +410,38 @@ export function QuoteEditor(props: {
 					/>
 				)}
 				<Row label="Total" value={formatMYR(subtotal + sst)} bold />
+				{monthly > 0 && (
+					<Row label="Plus monthly" value={`${formatMYR(monthly)} / month`} />
+				)}
+				{yearly > 0 && (
+					<Row label="Plus yearly" value={`${formatMYR(yearly)} / year`} />
+				)}
+				{optional > 0 && (
+					<Row
+						label="Optional add-ons (not in total)"
+						value={formatMYR(optional)}
+					/>
+				)}
+				{editable && estimates > 0 && (
+					<p className="pt-1 text-xs text-status-review">
+						{estimates} AI estimate{estimates === 1 ? "" : "s"} to check. Change
+						the hours or rate to confirm it.
+					</p>
+				)}
 			</div>
+
+			{(terms || editable) && (
+				<TermsEditor
+					terms={terms}
+					editable={editable}
+					problem={termsProblem}
+					onChange={patchTerms}
+					onClear={() => {
+						setDirty(true);
+						setTerms(null);
+					}}
+				/>
+			)}
 
 			{quote.status === "rejected" && (
 				<p className="border-t px-3 py-2 text-sm">
@@ -397,6 +546,232 @@ function Row({
 		>
 			<span>{label}</span>
 			<span className="tabular-nums">{value}</span>
+		</div>
+	);
+}
+
+const splitLines = (text: string) => text.split("\n");
+
+/** Timeline, payment schedule and terms. Starts from the price list; staff can change it. */
+function TermsEditor(props: {
+	terms: QuoteTerms | null;
+	editable: boolean;
+	problem: string | null;
+	onChange: (change: Partial<QuoteTerms>) => void;
+	onClear: () => void;
+}) {
+	const t = props.terms;
+	if (!props.editable) {
+		if (!t || !hasTerms(t)) return null;
+		return (
+			<div className="space-y-1 border-t px-3 py-2 text-xs text-muted-foreground">
+				{t.phases.length > 0 && (
+					<p>
+						<span className="font-medium text-foreground">
+							Timeline ~{totalWeeks(t)} wk:
+						</span>{" "}
+						{t.phases.map((p) => `${p.name} ${p.weeks}w`).join(" → ")}
+					</p>
+				)}
+				{t.payments.length > 0 && (
+					<p>
+						<span className="font-medium text-foreground">Payments:</span>{" "}
+						{t.payments.map((p) => `${p.percent}% ${p.label}`).join(", ")}
+					</p>
+				)}
+			</div>
+		);
+	}
+	if (!t)
+		return (
+			<div className="border-t px-3 py-2">
+				<Button
+					variant="ghost"
+					size="sm"
+					onClick={() =>
+						props.onChange({
+							phases: [],
+							payments: [],
+							assumptions: [],
+							exclusions: [],
+						})
+					}
+				>
+					<Plus className="size-4" /> Add timeline & payment terms
+				</Button>
+			</div>
+		);
+	const setPhase = (i: number, change: Partial<QuoteTerms["phases"][number]>) =>
+		props.onChange({
+			phases: t.phases.map((p, idx) => (idx === i ? { ...p, ...change } : p)),
+		});
+	const setPayment = (
+		i: number,
+		change: Partial<QuoteTerms["payments"][number]>,
+	) =>
+		props.onChange({
+			payments: t.payments.map((p, idx) =>
+				idx === i ? { ...p, ...change } : p,
+			),
+		});
+	return (
+		<div className="space-y-3 border-t px-3 py-3 text-sm">
+			<div className="flex items-center justify-between">
+				<p className="text-xs font-semibold tracking-wide text-muted-foreground uppercase">
+					Timeline & terms
+				</p>
+				<Button variant="ghost" size="sm" onClick={props.onClear}>
+					Remove
+				</Button>
+			</div>
+			<div className="space-y-1.5">
+				<p className="text-xs text-muted-foreground">
+					Timeline{t.phases.length ? ` · about ${totalWeeks(t)} weeks` : ""}
+				</p>
+				{t.phases.map((p, i) => (
+					// biome-ignore lint/suspicious/noArrayIndexKey: rows have no id; order is the identity
+					<div key={i} className="flex gap-2">
+						<Input
+							aria-label={`Phase ${i + 1} name`}
+							value={p.name}
+							onChange={(e) => setPhase(i, { name: e.target.value })}
+							className="h-8 flex-1"
+						/>
+						<Input
+							aria-label={`Phase ${i + 1} weeks`}
+							type="number"
+							min={1}
+							value={p.weeks}
+							onChange={(e) =>
+								setPhase(i, {
+									weeks: Math.max(1, Math.round(Number(e.target.value)) || 1),
+								})
+							}
+							className="h-8 w-16 text-right"
+						/>
+						<span className="self-center text-xs text-muted-foreground">
+							wk
+						</span>
+						<Button
+							variant="ghost"
+							size="icon"
+							className="size-8"
+							aria-label={`Remove phase ${i + 1}`}
+							onClick={() =>
+								props.onChange({
+									phases: t.phases.filter((_, idx) => idx !== i),
+								})
+							}
+						>
+							<Trash2 className="size-4" />
+						</Button>
+					</div>
+				))}
+				<Button
+					variant="outline"
+					size="sm"
+					onClick={() =>
+						props.onChange({
+							phases: [...t.phases, { name: "New phase", weeks: 1 }],
+						})
+					}
+				>
+					<Plus className="size-4" /> Phase
+				</Button>
+			</div>
+			<div className="space-y-1.5">
+				<p className="text-xs text-muted-foreground">Payment schedule</p>
+				{t.payments.map((p, i) => (
+					// biome-ignore lint/suspicious/noArrayIndexKey: rows have no id; order is the identity
+					<div key={i} className="flex gap-2">
+						<Input
+							aria-label={`Payment ${i + 1} percent`}
+							type="number"
+							min={1}
+							max={100}
+							value={p.percent}
+							onChange={(e) =>
+								setPayment(i, {
+									percent: Math.min(
+										100,
+										Math.max(1, Math.round(Number(e.target.value)) || 1),
+									),
+								})
+							}
+							className="h-8 w-16 text-right"
+						/>
+						<span className="self-center text-xs text-muted-foreground">%</span>
+						<Input
+							aria-label={`Payment ${i + 1} when`}
+							value={p.label}
+							onChange={(e) => setPayment(i, { label: e.target.value })}
+							className="h-8 flex-1"
+						/>
+						<Button
+							variant="ghost"
+							size="icon"
+							className="size-8"
+							aria-label={`Remove payment ${i + 1}`}
+							onClick={() =>
+								props.onChange({
+									payments: t.payments.filter((_, idx) => idx !== i),
+								})
+							}
+						>
+							<Trash2 className="size-4" />
+						</Button>
+					</div>
+				))}
+				<Button
+					variant="outline"
+					size="sm"
+					onClick={() =>
+						props.onChange({
+							payments: [
+								...t.payments,
+								{
+									label: "On completion",
+									percent: Math.max(
+										1,
+										100 - t.payments.reduce((s, x) => s + x.percent, 0),
+									),
+								},
+							],
+						})
+					}
+				>
+					<Plus className="size-4" /> Payment
+				</Button>
+				{props.problem && (
+					<p className="text-xs text-destructive">{props.problem}</p>
+				)}
+			</div>
+			<div className="grid gap-2 sm:grid-cols-2">
+				<div className="space-y-1 text-xs text-muted-foreground">
+					Assumptions (one per line)
+					<Textarea
+						aria-label="Assumptions"
+						rows={3}
+						value={t.assumptions.join("\n")}
+						onChange={(e) =>
+							props.onChange({ assumptions: splitLines(e.target.value) })
+						}
+						className="text-sm text-foreground"
+					/>
+				</div>
+				<div className="space-y-1 text-xs text-muted-foreground">
+					Not included (one per line)
+					<Textarea
+						aria-label="Not included"
+						rows={3}
+						value={t.exclusions.join("\n")}
+						onChange={(e) =>
+							props.onChange({ exclusions: splitLines(e.target.value) })
+						}
+						className="text-sm text-foreground"
+					/>
+				</div>
+			</div>
 		</div>
 	);
 }

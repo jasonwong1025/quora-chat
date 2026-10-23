@@ -819,6 +819,7 @@ export const demoBusinesses: DemoBusiness[] = [
 			{
 				id: "rr-door-install",
 				sku: "RR-DR-INSTALL",
+				active: false, // installer away: shows the "not available" reply
 				category: "Doors",
 				name: "Door installation",
 				description: "Remove old door and fit new one. Door not included.",
@@ -847,7 +848,6 @@ export const demoBusinesses: DemoBusiness[] = [
 				id: "rr-waterproofing",
 				sku: "RR-WP-JOB",
 				pricingMode: "custom",
-				active: false, // team fully booked: shows the "not available" reply
 				category: "Waterproofing",
 				name: "Waterproofing",
 				description: "Bathroom or roof waterproofing.",
@@ -859,6 +859,19 @@ export const demoBusinesses: DemoBusiness[] = [
 						label: "Which area needs waterproofing?",
 						type: "single",
 						options: ["bathroom", "roof", "balcony", "other"],
+					},
+					{
+						key: "area_size",
+						label: "Roughly how big is the area, in sqft?",
+						type: "number",
+						hint: "A rough guess is fine (a bathroom is usually 40-60 sqft). We confirm on site.",
+						onQuote: false,
+					},
+					{
+						key: "tiles_removal",
+						label: "Do the existing tiles need to be removed?",
+						type: "yes_no",
+						hint: "If unsure, say we'll check during the inspection.",
 					},
 					{
 						key: "photo",
@@ -1122,6 +1135,17 @@ export const demoBusinesses: DemoBusiness[] = [
 						label: "When do you want it live?",
 						type: "date",
 					},
+					{
+						key: "after_launch",
+						label: "After launch, should we host and maintain it for you?",
+						type: "single",
+						options: [
+							"hosting + maintenance",
+							"hosting only",
+							"no, we'll handle it",
+						],
+						onQuote: false,
+					},
 				],
 			},
 			{
@@ -1196,6 +1220,17 @@ export const demoBusinesses: DemoBusiness[] = [
 						type: "file",
 						required: false,
 					},
+					{
+						key: "after_launch",
+						label: "After launch, should we host and maintain it for you?",
+						type: "single",
+						options: [
+							"hosting + maintenance",
+							"hosting only",
+							"no, we'll handle it",
+						],
+						onQuote: false,
+					},
 				],
 			},
 			{
@@ -1237,6 +1272,29 @@ export const demoBusinesses: DemoBusiness[] = [
 						key: "has_backend",
 						label: "Is there an existing system it must connect to?",
 						type: "yes_no",
+					},
+					{
+						key: "screen_count",
+						label: "Roughly how many screens will the app have?",
+						type: "number",
+						hint: "A rough count is fine, e.g. 10-15. Help them think: home, login, list, details, cart, profile…",
+						onQuote: false,
+					},
+					{
+						key: "admin_panel",
+						label: "Do you need an admin dashboard to manage it?",
+						type: "yes_no",
+					},
+					{
+						key: "after_launch",
+						label: "After launch, should we host and maintain it for you?",
+						type: "single",
+						options: [
+							"hosting + maintenance",
+							"hosting only",
+							"no, we'll handle it",
+						],
+						onQuote: false,
 					},
 				],
 			},

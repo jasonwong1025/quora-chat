@@ -18,6 +18,7 @@ import {
 import { useMemo, useState } from "react";
 import { toast } from "sonner";
 import { z } from "zod";
+import { PriceListPanel } from "#/components/orbyte/price-builder";
 import {
 	fileToThumb,
 	ProductThumb,
@@ -809,6 +810,8 @@ function ProductSheet(props: {
 									</ul>
 								)}
 							</Section>
+
+							{p.pricingMode === "custom" && <PriceListPanel product={p} />}
 
 							{p.type === "stock" ? (
 								<StockPanel product={p} />

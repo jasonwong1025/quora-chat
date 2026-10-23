@@ -72,10 +72,61 @@ export const products = pgTable(
 		stockReserved: integer("stock_reserved").default(0).notNull(),
 		// Stock items only: when the next stock is expected (YYYY-MM-DD). The AI only quotes this date.
 		restockDate: text("restock_date"),
+		// Custom-priced items: how a draft is priced (see PriceBuilder).
+		priceBuilder: jsonb("price_builder").$type<PriceBuilder | null>(),
 		image: text("image"), // small data URL; served from /api/products/:id/image
 	},
 	(t) => [uniqueIndex("products_business_sku").on(t.businessId, t.sku)],
 );
+
+/** How a line is charged. Only one-time lines count towards the quotation total. */
+export type Charge = "one_time" | "monthly" | "yearly" | "optional";
+
+/** One priced part of a custom item, e.g. "Payment gateway" or "Hosting". */
+export type PriceComponent = {
+	id: string;
+	label: string;
+	charge: Charge;
+	/** Only when this answer matches (any of its values). Null = always included. */
+	when: { key: string; equals: string } | null;
+	amountSen: number;
+	/**
+	 * "fixed": amountSen once. "quantity": × the item's quantity.
+	 * "answer": × a number from an answer (a count, or W x H for an area).
+	 */
+	per:
+		| { kind: "fixed" }
+		| { kind: "quantity" }
+		| { kind: "answer"; key: string; unit: string };
+	/** Weeks of work this adds to the timeline (one-time parts only). */
+	weeks: number | null;
+	note: string | null;
+};
+
+/**
+ * The business's price list for a custom-priced item. Code prices what's on it;
+ * the AI only estimates gaps (effort × rate), and staff always review.
+ * Which sections exist (timeline, payment schedule…) suits the business's trade.
+ */
+export type PriceBuilder = {
+	/** For requirements the list doesn't cover. Null = no AI estimates. */
+	rate: { amountSen: number; unit: "hour" | "day" } | null;
+	components: PriceComponent[];
+	/** Empty = no timeline on the quote. Extra weeks go to the longest phase. */
+	phases: { name: string; weeks: number }[];
+	/** Empty = paid in full. Percents add up to 100. */
+	payments: { label: string; percent: number }[];
+	assumptions: string[];
+	exclusions: string[];
+};
+
+/** Timeline, payment schedule and terms printed on a custom quotation. */
+export type QuoteTerms = {
+	phases: { name: string; weeks: number }[];
+	payments: { label: string; percent: number }[];
+	assumptions: string[];
+	exclusions: string[];
+};
 
 export type PricingRuleConfig =
 	| {
@@ -336,6 +387,12 @@ export type LineItem = {
 	notes?: string;
 	/** Units still to come from restock; the customer agreed to wait, so signing reserves them anyway. */
 	backorder?: number;
+	/** Defaults to one-time. Monthly, yearly and optional lines sit outside the total. */
+	charge?: Charge;
+	/** "builder": from the price list. "ai_estimate": effort × rate, for staff to check. */
+	source?: "builder" | "ai_estimate";
+	/** Staff-only: why the AI estimated this effort. Never shown to the customer. */
+	estimate?: { reasoning: string };
 };
 
 export const quoteStatus = pgEnum("quote_status", [
@@ -377,6 +434,7 @@ export const quotes = pgTable("quotes", {
 	sstSen: integer("sst_sen").notNull(),
 	totalSen: integer("total_sen").notNull(),
 	notes: text("notes"),
+	terms: jsonb("terms").$type<QuoteTerms | null>(),
 	validUntil: timestamp("valid_until", { withTimezone: true }).notNull(),
 	decidedBy: text("decided_by").references(() => staff.id),
 	decidedAt: timestamp("decided_at", { withTimezone: true }),

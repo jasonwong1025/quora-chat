@@ -13,8 +13,15 @@ import {
 import { z } from "zod";
 import { getDemoBusiness } from "#/data/demo";
 import { getDb, schema } from "#/db";
+import { questionsFor } from "#/lib/intake";
+import { emptyBuilder } from "#/lib/price-builder";
 import { suggestSku, uniqueSku } from "#/lib/sku";
-import { aiMode, aiModelName, suggestQuestions } from "#/server/ai";
+import {
+	aiMode,
+	aiModelName,
+	draftPriceBuilder,
+	suggestQuestions,
+} from "#/server/ai";
 import { resetDemoActivity } from "#/server/demo-reset";
 import { fastForward, followUpAction } from "#/server/followups";
 import {
@@ -329,6 +336,32 @@ const lineItemSchema = z.object({
 	unitPriceSen: z.number().int().nonnegative(),
 	amountSen: z.number().int().nonnegative(),
 	notes: z.string().optional(),
+	backorder: z.number().int().positive().optional(),
+	charge: z.enum(["one_time", "monthly", "yearly", "optional"]).optional(),
+	source: z.enum(["builder", "ai_estimate"]).optional(),
+	estimate: z.object({ reasoning: z.string() }).optional(),
+});
+
+const termsSchema = z.object({
+	phases: z.array(
+		z.object({
+			name: z.string().trim().min(1),
+			weeks: z.number().int().positive().max(520),
+		}),
+	),
+	payments: z
+		.array(
+			z.object({
+				label: z.string().trim().min(1),
+				percent: z.number().int().positive().max(100),
+			}),
+		)
+		.refine(
+			(p) => p.length === 0 || p.reduce((s, x) => s + x.percent, 0) === 100,
+			"Payments must add up to 100%",
+		),
+	assumptions: z.array(z.string().trim().min(1)),
+	exclusions: z.array(z.string().trim().min(1)),
 });
 
 const updateQuote = os
@@ -338,6 +371,7 @@ const updateQuote = os
 			staffId: z.string(),
 			lineItems: z.array(lineItemSchema),
 			notes: z.string().nullable(),
+			terms: termsSchema.nullable().optional(),
 			reviewToken: z.string(),
 		}),
 	)
@@ -922,6 +956,200 @@ const addQuestions = os
 		return inserted;
 	});
 
+// --- Price lists for custom-priced items ------------------------------------------
+
+const sen = (rm: number) => Math.max(0, Math.round(rm * 100));
+
+const priceBuilderSchema = z.object({
+	rate: z
+		.object({
+			amountSen: z.number().int().positive(),
+			unit: z.enum(["hour", "day"]),
+		})
+		.nullable(),
+	components: z
+		.array(
+			z.object({
+				id: z.string().min(1),
+				label: z.string().trim().min(1).max(120),
+				charge: z.enum(["one_time", "monthly", "yearly", "optional"]),
+				when: z
+					.object({ key: z.string().min(1), equals: z.string().min(1) })
+					.nullable(),
+				amountSen: z.number().int().nonnegative(),
+				per: z.discriminatedUnion("kind", [
+					z.object({ kind: z.literal("fixed") }),
+					z.object({ kind: z.literal("quantity") }),
+					z.object({
+						kind: z.literal("answer"),
+						key: z.string().min(1),
+						unit: z.string().trim().min(1).max(30),
+					}),
+				]),
+				weeks: z.number().nonnegative().max(260).nullable(),
+				note: z.string().trim().max(200).nullable(),
+			}),
+		)
+		.max(40),
+	phases: termsSchema.shape.phases,
+	payments: termsSchema.shape.payments,
+	assumptions: z.array(z.string().trim().min(1).max(300)).max(12),
+	exclusions: z.array(z.string().trim().min(1).max(300)).max(12),
+});
+
+async function loadCustomProduct(productId: string) {
+	const db = getDb();
+	const product = await db.query.products.findFirst({
+		where: eq(schema.products.id, productId),
+	});
+	if (!product) throw new ORPCError("NOT_FOUND");
+	const [business, questions, others] = await Promise.all([
+		db.query.businesses.findFirst({
+			where: eq(schema.businesses.id, product.businessId),
+		}),
+		db
+			.select()
+			.from(schema.intakeQuestions)
+			.where(eq(schema.intakeQuestions.businessId, product.businessId)),
+		db
+			.select({ id: schema.products.id, name: schema.products.name })
+			.from(schema.products)
+			.where(eq(schema.products.businessId, product.businessId)),
+	]);
+	if (!business) throw new ORPCError("NOT_FOUND");
+	return {
+		product,
+		business,
+		questions: questionsFor(product, questions),
+		others: others.filter((o) => o.id !== product.id).map((o) => o.name),
+	};
+}
+
+/** AI drafts a price list (and any questions it needs). Nothing is saved. */
+const suggestPriceBuilder = os
+	.input(z.object({ productId: z.string() }))
+	.handler(async ({ input }) => {
+		const { product, business, questions, others } = await loadCustomProduct(
+			input.productId,
+		);
+		const draft = await draftPriceBuilder({
+			businessName: business.name,
+			industry: business.industry,
+			product,
+			questions: questions.map((q) => ({
+				key: q.key,
+				label: q.label,
+				type: q.type,
+				options: q.options,
+			})),
+			otherProducts: others,
+		}).catch(fail);
+		const keys = new Set([
+			...questions.map((q) => q.key),
+			...draft.newQuestions.map((q) => q.key),
+		]);
+		const builder = {
+			...emptyBuilder(),
+			rate:
+				draft.rate && draft.rate.amount > 0
+					? { amountSen: sen(draft.rate.amount), unit: draft.rate.unit }
+					: null,
+			components: draft.components.map((c, i) => ({
+				id: `c${i + 1}`,
+				label: c.label,
+				charge: c.charge,
+				when:
+					c.whenKey && c.whenEquals && keys.has(c.whenKey)
+						? { key: c.whenKey, equals: c.whenEquals }
+						: null,
+				amountSen: sen(c.amount),
+				per:
+					c.per === "answer" && c.perKey && keys.has(c.perKey)
+						? {
+								kind: "answer" as const,
+								key: c.perKey,
+								unit: c.perUnit || "unit",
+							}
+						: c.per === "quantity"
+							? { kind: "quantity" as const }
+							: { kind: "fixed" as const },
+				weeks: c.charge === "one_time" ? c.weeks : null,
+				note: c.note,
+			})),
+			phases: draft.phases
+				.filter((p) => p.weeks > 0)
+				.map((p) => ({
+					name: p.name,
+					weeks: Math.max(1, Math.round(p.weeks)),
+				})),
+			payments: draft.payments.map((p) => ({
+				label: p.label,
+				percent: Math.round(p.percent),
+			})),
+			assumptions: draft.assumptions,
+			exclusions: draft.exclusions,
+		};
+		return {
+			builder,
+			newQuestions: draft.newQuestions.filter(
+				(q) => !questions.some((e) => e.key === q.key),
+			),
+		};
+	});
+
+/** Saves the price list, adding any questions it needs so the AI gathers them. */
+const savePriceBuilder = os
+	.input(
+		z.object({
+			productId: z.string(),
+			builder: priceBuilderSchema.nullable(),
+			newQuestions: z.array(questionFields).max(10).default([]),
+			actor: z.string(),
+		}),
+	)
+	.handler(async ({ input }) => {
+		const { product, questions } = await loadCustomProduct(input.productId);
+		return getDb().transaction(async (db) => {
+			const keys = new Set(questions.map((q) => q.key));
+			const fresh = input.newQuestions.filter((q) => !keys.has(q.key));
+			let position = Math.max(
+				0,
+				...questions
+					.filter((q) => q.productId === product.id)
+					.map((q) => q.position + 1),
+			);
+			if (fresh.length)
+				await db.insert(schema.intakeQuestions).values(
+					fresh.map((q) => {
+						checkQuestion(q);
+						return {
+							...q,
+							businessId: product.businessId,
+							scope: "product" as const,
+							category: null,
+							productId: product.id,
+							position: position++,
+							source: "ai" as const,
+						};
+					}),
+				);
+			const [row] = await db
+				.update(schema.products)
+				.set({ priceBuilder: input.builder })
+				.where(eq(schema.products.id, product.id))
+				.returning();
+			await emitOrbyteEvent(db, {
+				businessId: product.businessId,
+				type: "product.updated",
+				actor: input.actor,
+				summary: input.builder
+					? `${input.actor} saved the price list for ${product.name} (${input.builder.components.length} parts${fresh.length ? `, ${fresh.length} new question${fresh.length === 1 ? "" : "s"}` : ""})`
+					: `${input.actor} removed the price list for ${product.name}`,
+			});
+			return row;
+		});
+	});
+
 async function loadQuestion(questionId: string) {
 	const row = await getDb().query.intakeQuestions.findFirst({
 		where: eq(schema.intakeQuestions.id, questionId),
@@ -1290,6 +1518,7 @@ const getJob = os
 				sstSen: quote.sstSen,
 				totalSen: quote.totalSen,
 				notes: quote.notes,
+				terms: quote.terms,
 				signerName: quote.signerName,
 				signedAt: quote.signedAt,
 			},
@@ -1641,6 +1870,8 @@ export default {
 		update: updateProduct,
 		setImage: setProductImage,
 		adjustStock,
+		suggestPriceBuilder,
+		savePriceBuilder,
 	},
 	rules: { delete: deleteRule },
 	esign: { list: esignList, markViewed, sign },
