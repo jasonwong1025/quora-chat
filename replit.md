@@ -19,9 +19,11 @@ Replit supplies `DATABASE_URL`. The empty development database has been
 initialized with the schema, eight migrations, and five synthetic businesses.
 Do not seed or reset it again unless the user deliberately requests a reset.
 
-AI uses only Replit-managed OpenAI, default model `gpt-5-mini`. It requires
-`AI_INTEGRATIONS_OPENAI_BASE_URL` and `AI_INTEGRATIONS_OPENAI_API_KEY`.
-Never invent credentials or replace the provider silently.
+AI supports two providers: Replit-managed OpenAI (used first when
+`AI_INTEGRATIONS_OPENAI_BASE_URL` and `AI_INTEGRATIONS_OPENAI_API_KEY` exist,
+default model `gpt-5-mini`) and OpenRouter via `OPENROUTER_API_KEY` for local
+runs (default `openai/gpt-5-mini`). Local dev uses port 3000, Replit uses 5000.
+Never invent credentials.
 
 The managed OpenAI integration is enabled (provisioned with
 `setupReplitAIIntegrations({ providerSlug: "openai" })`, after phone

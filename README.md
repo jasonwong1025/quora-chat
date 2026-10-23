@@ -50,7 +50,7 @@ Open `/whatsapp` and `/orbyte` in two tabs side by side. People and Connect show
 - [Hono](https://hono.dev): HTTP layer, mounted at `/api/*` inside Start
 - [oRPC](https://orpc.unnoq.com): typed RPC at `/api/rpc`, with streaming workflow progress
 - [Drizzle ORM](https://orm.drizzle.team) on [Replit Database](https://replit.com/products/database) (Postgres)
-- Replit-managed OpenAI (Replit AI Integrations) for message parsing and replies
+- OpenRouter (local) or Replit-managed OpenAI (on Replit) for message parsing and replies
 - Tailwind CSS v4 and shadcn/ui, plus `@react-pdf/renderer` for quotation PDFs
 
 ## Getting started
@@ -63,7 +63,7 @@ pnpm db:seed              # load the 5 demo businesses (new disposable DB only)
 pnpm dev                  # http://localhost:3000, plus the signing → handover worker
 ```
 
-See [SETUP.md](SETUP.md) for the Replit setup. AI uses Replit-managed OpenAI through `AI_INTEGRATIONS_OPENAI_BASE_URL` and `AI_INTEGRATIONS_OPENAI_API_KEY`, with no fallback provider. `AI_MODEL` defaults to `gpt-5-mini` and must support strict structured outputs and `reasoning_effort: "minimal"`. Use Node.js 22 and pnpm 10.26.1. The Replit preview runs on port 5000.
+AI works two ways, chosen by which credentials exist. Locally, set `OPENROUTER_API_KEY` (from https://openrouter.ai/keys); the dev server uses port 3000. On Replit, enable Replit-managed OpenAI (`AI_INTEGRATIONS_OPENAI_BASE_URL` and `AI_INTEGRATIONS_OPENAI_API_KEY`, used first when present; see [SETUP.md](SETUP.md)); the preview uses port 5000. `AI_MODEL` defaults to `openai/gpt-5-mini` on OpenRouter and `gpt-5-mini` on Replit; it must support strict structured outputs and `reasoning_effort: "minimal"`. Use Node.js 22 and pnpm 10.26.1.
 
 ## Demo businesses
 
@@ -84,7 +84,7 @@ src/
   data/demo.ts          synthetic businesses, catalogs, pricing rules, sample messages
   db/                   Drizzle schema, client, seed script
   server/
-    ai.ts               reads messages into the brief, writes replies, suggests questions (Replit-managed OpenAI)
+    ai.ts               reads messages into the brief, writes replies, suggests questions (OpenRouter locally, Replit-managed OpenAI on Replit)
     pricing.ts          deterministic pricing engine
     workflow.ts         message → brief → ask / confirm / draft → approval → revision → signing
     followups.ts        reminders for unsigned quotes, reply routing, extension, lost, demo clock
