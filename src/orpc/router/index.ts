@@ -20,8 +20,17 @@ import {
 	aiMode,
 	aiModelName,
 	draftPriceBuilder,
+	suggestBilling,
 	suggestQuestions,
 } from "#/server/ai";
+import {
+	outstanding,
+	payInvoice,
+	recordPayment,
+	reminderAction,
+	sendStatement,
+	statementFor,
+} from "#/server/billing";
 import { resetDemoActivity } from "#/server/demo-reset";
 import { fastForward, followUpAction } from "#/server/followups";
 import {
@@ -175,6 +184,7 @@ const getConversation = os
 			where: eq(schema.aiRuns.conversationId, conversation.id),
 			orderBy: asc(schema.aiRuns.createdAt),
 		});
+		const billing = await chatBilling(conversation.id);
 		const relays = await db
 			.select({
 				relay: schema.relays,
@@ -191,6 +201,7 @@ const getConversation = os
 			...conversation,
 			messages,
 			quotes,
+			...billing,
 			runs,
 			relays: relays.map((r) => ({
 				...r.relay,
@@ -200,6 +211,42 @@ const getConversation = os
 			})),
 		};
 	});
+
+/** Invoices (with what they cover) and payments in a chat, for the pay cards. */
+async function chatBilling(conversationId: string) {
+	const db = getDb();
+	const rows = await db
+		.select({ invoice: schema.invoices, quote: schema.quotes })
+		.from(schema.invoices)
+		.innerJoin(schema.quotes, eq(schema.invoices.quoteId, schema.quotes.id))
+		.where(eq(schema.invoices.conversationId, conversationId))
+		.orderBy(asc(schema.invoices.issuedAt));
+	const payments = rows.length
+		? await db
+				.select()
+				.from(schema.payments)
+				.where(
+					inArray(
+						schema.payments.invoiceId,
+						rows.map((r) => r.invoice.id),
+					),
+				)
+		: [];
+	return {
+		invoices: rows.map(({ invoice, quote }) => ({
+			...invoice,
+			quoteNumber: quote.number,
+			items: quote.lineItems
+				.filter((l) => !l.charge || l.charge === "one_time")
+				.map((l) => ({
+					description: l.description,
+					quantity: l.quantity,
+					unit: l.unit,
+				})),
+		})),
+		payments,
+	};
+}
 
 /** Streams workflow progress so the UI can show each step as it happens. */
 const attachmentInput = z
@@ -354,6 +401,8 @@ const termsSchema = z.object({
 			z.object({
 				label: z.string().trim().min(1),
 				percent: z.number().int().positive().max(100),
+				when: z.enum(["signed", "phase", "completed"]).optional(),
+				phase: z.string().nullable().optional(),
 			}),
 		)
 		.refine(
@@ -1085,6 +1134,8 @@ const suggestPriceBuilder = os
 			payments: draft.payments.map((p) => ({
 				label: p.label,
 				percent: Math.round(p.percent),
+				when: p.when,
+				phase: p.when === "phase" ? p.phase : null,
 			})),
 			assumptions: draft.assumptions,
 			exclusions: draft.exclusions,
@@ -1562,6 +1613,7 @@ const addJobTask = os
 			staffId: z.string(),
 			title: z.string().trim().min(1).max(200),
 			source: z.enum(["staff", "bot"]).optional(),
+			phase: z.string().nullable().optional(),
 		}),
 	)
 	.handler(({ input }) => addTask(input).catch(fail));
@@ -1573,6 +1625,7 @@ const updateJobTask = os
 			status: z.enum(["todo", "active", "blocked", "done"]).optional(),
 			note: z.string().max(500).nullable().optional(),
 			title: z.string().trim().min(1).max(200).optional(),
+			phase: z.string().nullable().optional(),
 		}),
 	)
 	.handler(({ input }) => updateTask(input).catch(fail));
@@ -1791,6 +1844,206 @@ const updateFollowUpRules = os
 		return { ok: true };
 	});
 
+// --- Billing ------------------------------------------------------------------------------
+
+const instalmentSchema = z.object({
+	label: z.string().trim().min(1).max(80),
+	percent: z.number().int().positive().max(100),
+	when: z.enum(["signed", "phase", "completed"]),
+	phase: z.string().nullable().optional(),
+});
+
+async function approver(businessId: string, staffId: string) {
+	const member = await getDb().query.staff.findFirst({
+		where: and(
+			eq(schema.staff.id, staffId),
+			eq(schema.staff.businessId, businessId),
+		),
+	});
+	if (!member?.canApprove)
+		fail(new Error("Only someone who can approve quotes can change this"));
+	return member as typeof schema.staff.$inferSelect;
+}
+
+/** Everything billed and paid for a job, plus what's still to be invoiced. */
+const jobBilling = os
+	.input(z.object({ jobId: z.string() }))
+	.handler(async ({ input }) => {
+		const db = getDb();
+		const job = await db.query.jobs.findFirst({
+			where: eq(schema.jobs.id, input.jobId),
+		});
+		if (!job) throw new ORPCError("NOT_FOUND");
+		const st = await statementFor(job.quoteId);
+		const reminders = st.invoices.length
+			? await db
+					.select()
+					.from(schema.quoteFollowUps)
+					.where(
+						inArray(
+							schema.quoteFollowUps.invoiceId,
+							st.invoices.map((i) => i.id),
+						),
+					)
+					.orderBy(asc(schema.quoteFollowUps.dueAt))
+			: [];
+		const documents = await db
+			.select({
+				id: schema.messages.id,
+				document: schema.messages.document,
+				createdAt: schema.messages.createdAt,
+			})
+			.from(schema.messages)
+			.where(
+				and(
+					eq(schema.messages.conversationId, st.conversation.id),
+					sql`${schema.messages.document} is not null`,
+				),
+			)
+			.orderBy(asc(schema.messages.createdAt));
+		return {
+			quoteNumber: st.quote.number,
+			totalSen: st.quote.totalSen,
+			paidSen: st.paidSen,
+			balanceSen: st.balanceSen,
+			plan: st.plan.map((p) => {
+				const invoice = st.invoices.find((i) => i.instalment === p.index);
+				return {
+					...p,
+					invoice: invoice ?? null,
+					payments: invoice
+						? st.payments.filter((x) => x.invoiceId === invoice.id)
+						: [],
+					reminders: invoice
+						? reminders.filter((r) => r.invoiceId === invoice.id)
+						: [],
+				};
+			}),
+			documents: documents.flatMap((d) =>
+				d.document ? [{ ...d.document, at: d.createdAt }] : [],
+			),
+		};
+	});
+
+/** The customer pays from the WhatsApp invoice card (simulated card; no real gateway). */
+const payInvoiceInput = os
+	.input(z.object({ invoiceId: z.string(), card: z.string().max(40) }))
+	.handler(({ input }) => payInvoice(input).catch(fail));
+
+const recordPaymentInput = os
+	.input(
+		z.object({
+			invoiceId: z.string(),
+			staffId: z.string(),
+			method: z.enum(["bank_transfer", "cash"]),
+			reference: z.string().trim().max(80).nullable(),
+		}),
+	)
+	.handler(({ input }) => recordPayment(input).catch(fail));
+
+const invoiceReminder = os
+	.input(
+		z.object({
+			invoiceId: z.string(),
+			staffId: z.string(),
+			action: z.enum(["pause", "resume", "send_now"]),
+		}),
+	)
+	.handler(({ input }) => reminderAction(input).catch(fail));
+
+const resendStatement = os
+	.input(z.object({ jobId: z.string(), staffId: z.string() }))
+	.handler(async ({ input }) => {
+		const job = await getDb().query.jobs.findFirst({
+			where: eq(schema.jobs.id, input.jobId),
+		});
+		if (!job) throw new ORPCError("NOT_FOUND");
+		const member = await getDb().query.staff.findFirst({
+			where: and(
+				eq(schema.staff.id, input.staffId),
+				eq(schema.staff.businessId, job.businessId),
+			),
+		});
+		if (!member) fail(new Error("Staff member not found"));
+		await sendStatement(job.id);
+		return { ok: true };
+	});
+
+const updateBillingRules = os
+	.input(
+		businessInput.extend({
+			staffId: z.string(),
+			billing: z.object({
+				schedule: z
+					.array(instalmentSchema)
+					.min(1)
+					.max(6)
+					.refine(
+						(p) => p.reduce((s, x) => s + x.percent, 0) === 100,
+						"Payments must add up to 100%",
+					),
+				dueDays: z.number().int().min(0).max(90),
+				statement: z.boolean(),
+				completionReport: z.boolean(),
+			}),
+		}),
+	)
+	.handler(async ({ input }) => {
+		const member = await approver(input.businessId, input.staffId);
+		// Business defaults have no phases (those come from a quote's timeline).
+		const billing = {
+			...input.billing,
+			schedule: input.billing.schedule.map((p) => ({
+				label: p.label,
+				percent: p.percent,
+				when: p.when === "phase" ? ("completed" as const) : p.when,
+			})),
+		};
+		const db = getDb();
+		await db
+			.update(schema.businesses)
+			.set({ billing })
+			.where(eq(schema.businesses.id, input.businessId));
+		await emitOrbyteEvent(db, {
+			businessId: input.businessId,
+			type: "product.updated",
+			actor: member.name,
+			summary: `${member.name} updated the billing rules: ${billing.schedule.map((p) => `${p.percent}% ${p.when === "signed" ? "on signing" : "on completion"}`).join(", ")}`,
+		});
+		return { ok: true };
+	});
+
+const suggestBillingRules = os
+	.input(businessInput)
+	.handler(async ({ input }) => {
+		const db = getDb();
+		const business = await db.query.businesses.findFirst({
+			where: eq(schema.businesses.id, input.businessId),
+		});
+		if (!business) throw new ORPCError("NOT_FOUND");
+		const products = await db
+			.select({ name: schema.products.name })
+			.from(schema.products)
+			.where(eq(schema.products.businessId, business.id));
+		const r = await suggestBilling({
+			businessName: business.name,
+			industry: business.industry,
+			products: products.map((p) => p.name),
+		}).catch(fail);
+		return {
+			...r,
+			schedule: r.schedule.map((p) => ({
+				...p,
+				percent: Math.round(p.percent),
+			})),
+			dueDays: Math.max(0, Math.min(90, Math.round(r.dueDays))),
+		};
+	});
+
+const billingOverview = os
+	.input(businessInput)
+	.handler(({ input }) => outstanding(input.businessId));
+
 // --- Company knowledge base --------------------------------------------------------------
 
 const listKnowledge = os
@@ -1896,6 +2149,15 @@ export default {
 		followUp: quoteFollowUpAction,
 	},
 	followUpRules: { update: updateFollowUpRules },
+	billing: {
+		job: jobBilling,
+		pay: payInvoiceInput,
+		record: recordPaymentInput,
+		reminder: invoiceReminder,
+		statement: resendStatement,
+		rules: { update: updateBillingRules, suggest: suggestBillingRules },
+		overview: billingOverview,
+	},
 	demo: { fastForward: demoFastForward, reset: demoReset },
 	system: { info: systemInfo },
 	jobs: {

@@ -1,5 +1,6 @@
 import { quoteBadge, StatusBadge } from "#/components/status-badge";
 import { agreementLines } from "#/lib/agreements";
+import { triggerLabel } from "#/lib/billing";
 import { formatMYR } from "#/lib/money";
 import {
 	chargeLabel,
@@ -208,6 +209,7 @@ export function QuoteTermsView({
 							>
 								<span>
 									{p.percent}% {p.label}
+									{p.when ? ` · ${triggerLabel(p)}` : ""}
 								</span>
 								<span className="tabular-nums">{formatMYR(p.amountSen)}</span>
 							</li>

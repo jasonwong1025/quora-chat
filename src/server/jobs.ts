@@ -19,7 +19,9 @@ import {
 	readRelayAnswer,
 	writeHandover,
 } from "./ai";
+import { issueInvoices, onJobCompleted } from "./billing";
 import { findKnowledge } from "./knowledge";
+import { notify } from "./notify";
 import { emitOrbyteEvent } from "./orbyte";
 import { deliveryBaseline } from "./revisions";
 import { enqueueTask, finishTask, type TaskClaim } from "./tasks";
@@ -40,29 +42,6 @@ const kindCode: Record<JobKind, string> = {
 };
 
 // --- Notifications (simulated Orbyte app + email) --------------------------------------
-
-export async function notify(
-	db: Database,
-	n: {
-		businessId: string;
-		staffIds: (string | null | undefined)[];
-		title: string;
-		body: string;
-		link?: string;
-	},
-) {
-	const ids = [...new Set(n.staffIds.filter((x): x is string => Boolean(x)))];
-	if (!ids.length) return;
-	await db.insert(schema.notifications).values(
-		ids.map((staffId) => ({
-			businessId: n.businessId,
-			staffId,
-			title: n.title,
-			body: n.body,
-			link: n.link ?? null,
-		})),
-	);
-}
 
 const jobLink = (businessId: string, jobId: string) =>
 	`/orbyte/${businessId}/work/${jobId}`;
@@ -338,6 +317,7 @@ async function jobContext(jobId: string) {
 		quote.lineItems.some((l) => l.productId === p.id),
 	);
 	const context: JobContext = {
+		phases: (quote.terms?.phases ?? []).map((p) => p.name),
 		businessName: business.name,
 		industry: business.industry,
 		customerName: conversation.customerName,
@@ -425,6 +405,7 @@ export async function buildHandover(
 	);
 	const draft = await writeHandover({ ...context, knowledge });
 	const { title: proposedTitle, tasks, ...handover } = draft;
+	const phases = context.phases;
 	const title = proposedTitle || job.title;
 	return getDb().transaction(async (db) => {
 		await finishTask(db, claim);
@@ -445,7 +426,7 @@ export async function buildHandover(
 			.update(schema.jobs)
 			.set({
 				handover: current.agreementReviewRequired
-					? { ...handover, suggestedTasks: tasks }
+					? { ...handover, suggestedTasks: tasks.map((t) => t.title) }
 					: handover,
 				title,
 				status: "upcoming",
@@ -463,9 +444,11 @@ export async function buildHandover(
 				);
 			if (tasks.length)
 				await db.insert(schema.jobTasks).values(
-					tasks.slice(0, 10).map((t, position) => ({
+					tasks.slice(0, 12).map((t, position) => ({
 						jobId: job.id,
-						title: t,
+						title: t.title,
+						// Only the quotation's own phases count (they can trigger invoices).
+						phase: phases.includes(t.phase ?? "") ? t.phase : null,
 						position,
 						source: "ai",
 					})),
@@ -546,7 +529,8 @@ export async function updateJob(input: {
 	picId?: string | null;
 	acknowledgeAgreement?: boolean;
 }) {
-	return getDb().transaction(async (db) => {
+	let completedNow = false;
+	const updated = await getDb().transaction(async (db) => {
 		const [job] = await db
 			.select()
 			.from(schema.jobs)
@@ -630,8 +614,10 @@ export async function updateJob(input: {
 				actor: member.name,
 				summary: `${job.number} marked ${input.status} by ${member.name}`,
 			});
-			if (input.status === "completed")
+			if (input.status === "completed") {
 				await deliverStock(db, job, member.name);
+				completedNow = true;
+			}
 		}
 		const [row] = await db
 			.update(schema.jobs)
@@ -640,6 +626,8 @@ export async function updateJob(input: {
 			.returning();
 		return row;
 	});
+	if (completedNow) await onJobCompleted(updated.id);
+	return updated;
 }
 
 /** Completing a job hands over its reserved stock (it leaves inventory). */
@@ -725,6 +713,7 @@ export async function addTask(input: {
 	staffId: string;
 	title: string;
 	source?: "staff" | "bot";
+	phase?: string | null;
 }) {
 	const db = getDb();
 	const job = await db.query.jobs.findFirst({
@@ -743,6 +732,7 @@ export async function addTask(input: {
 		.values({
 			jobId: job.id,
 			title: input.title.trim(),
+			phase: input.phase ?? null,
 			position: Number(max) + 1,
 			source: input.source ?? "staff",
 		})
@@ -762,8 +752,9 @@ export async function updateTask(input: {
 	status?: "todo" | "active" | "blocked" | "done";
 	note?: string | null;
 	title?: string;
+	phase?: string | null;
 }) {
-	return getDb().transaction(async (db) => {
+	const updated = await getDb().transaction(async (db) => {
 		const task = await db.query.jobTasks.findFirst({
 			where: eq(schema.jobTasks.id, input.taskId),
 		});
@@ -795,12 +786,107 @@ export async function updateTask(input: {
 		const { taskId, ...patch } = input;
 		const [row] = await db
 			.update(schema.jobTasks)
-			.set(patch)
+			.set({
+				...patch,
+				...(input.status
+					? { doneAt: input.status === "done" ? new Date() : null }
+					: {}),
+			})
 			.where(eq(schema.jobTasks.id, taskId))
 			.returning();
 		if (!row) throw new Error("Task not found");
 		return row;
 	});
+	await onTasksChanged(updated.jobId);
+	return updated;
+}
+
+/**
+ * Work moved: start the job on the first progress, invoice a phase when all its
+ * tasks are done, and complete the job automatically when every task is done.
+ */
+export async function onTasksChanged(jobId: string) {
+	const db = getDb();
+	const job = await db.query.jobs.findFirst({
+		where: eq(schema.jobs.id, jobId),
+	});
+	if (!job || !["upcoming", "active"].includes(job.status)) return;
+	const quote = await db.query.quotes.findFirst({
+		where: eq(schema.quotes.id, job.quoteId),
+	});
+	if (!quote || quote.status !== "accepted") return;
+	const tasks = await db
+		.select()
+		.from(schema.jobTasks)
+		.where(eq(schema.jobTasks.jobId, job.id));
+	if (!tasks.length) return;
+	const done = (t: (typeof tasks)[number]) => t.status === "done";
+	if (job.status === "upcoming" && tasks.some((t) => t.status !== "todo"))
+		await db
+			.update(schema.jobs)
+			.set({ status: "active", updatedAt: new Date() })
+			.where(
+				and(eq(schema.jobs.id, job.id), eq(schema.jobs.status, "upcoming")),
+			);
+	for (const phase of quote.terms?.phases ?? []) {
+		const inPhase = tasks.filter((t) => t.phase === phase.name);
+		if (inPhase.length && inPhase.every(done))
+			await issueInvoices(quote.id, { kind: "phase", phase: phase.name });
+	}
+	if (tasks.every(done) && !job.agreementReviewRequired)
+		await completeJob(job.id);
+}
+
+/** Every task is done: the job completes itself and the closing documents go out. */
+async function completeJob(jobId: string) {
+	const completed = await getDb().transaction(async (db) => {
+		const [row] = await db
+			.update(schema.jobs)
+			.set({
+				status: "completed",
+				completedAt: new Date(),
+				updatedAt: new Date(),
+			})
+			.where(
+				and(
+					eq(schema.jobs.id, jobId),
+					inArray(schema.jobs.status, ["upcoming", "active"]),
+				),
+			)
+			.returning();
+		if (!row) return null;
+		await deliverStock(db, row, "quora-chat");
+		await postSystem(
+			db,
+			row.id,
+			"All tasks are done, so the job is complete. The customer has been sent the closing documents.",
+		);
+		await emitOrbyteEvent(db, {
+			businessId: row.businessId,
+			requestId: row.requestId,
+			type: "job.status_changed",
+			actor: "quora-chat",
+			summary: `${row.number} completed automatically: all tasks done`,
+		});
+		const approvers = await db
+			.select({ id: schema.staff.id })
+			.from(schema.staff)
+			.where(
+				and(
+					eq(schema.staff.businessId, row.businessId),
+					eq(schema.staff.canApprove, true),
+				),
+			);
+		await notify(db, {
+			businessId: row.businessId,
+			staffIds: [...approvers.map((a) => a.id), row.picId],
+			title: `${row.number} completed`,
+			body: `All tasks are done. The customer was sent the closing documents.`,
+			link: `${jobLink(row.businessId, row.id)}?tab=billing`,
+		});
+		return row;
+	});
+	if (completed) await onJobCompleted(completed.id);
 }
 
 // --- What the AI knows about the job -------------------------------------------------------

@@ -3,13 +3,13 @@
  * writes the message; code enforces the business's limits (how many, how far
  * apart, working hours, never after expiry) and logs every step.
  */
-import { and, asc, desc, eq, inArray, lte, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, lte, ne, sql } from "drizzle-orm";
 import { type Database, getDb, schema } from "#/db";
 import type { Language, LostReason } from "#/db/schema";
 import { quoteAgreementIssue } from "#/lib/agreements";
 import { answerText } from "#/lib/intake";
 import { planFollowUpTiming, writeFollowUp } from "./ai";
-import { notify } from "./jobs";
+import { notify } from "./notify";
 import { emitOrbyteEvent } from "./orbyte";
 
 type Business = typeof schema.businesses.$inferSelect;
@@ -97,6 +97,7 @@ async function loadQuoteContext(quoteId: string) {
 	return { quote, business, request, conversation };
 }
 
+/** Cancels quote reminders (payment reminders for its invoices are handled by billing). */
 async function cancelScheduled(quoteId: string, db: Database = getDb()) {
 	await db
 		.update(schema.quoteFollowUps)
@@ -105,11 +106,12 @@ async function cancelScheduled(quoteId: string, db: Database = getDb()) {
 			and(
 				eq(schema.quoteFollowUps.quoteId, quoteId),
 				eq(schema.quoteFollowUps.status, "scheduled"),
+				ne(schema.quoteFollowUps.kind, "payment_reminder"),
 			),
 		);
 }
 
-async function recentChat(conversationId: string) {
+export async function recentChat(conversationId: string) {
 	const rows = await getDb().query.messages.findMany({
 		where: eq(schema.messages.conversationId, conversationId),
 		orderBy: desc(schema.messages.createdAt),
@@ -551,6 +553,7 @@ export async function runFollowUps(businessId?: string) {
 			.where(
 				and(
 					eq(schema.quoteFollowUps.status, "scheduled"),
+					ne(schema.quoteFollowUps.kind, "payment_reminder"),
 					lte(schema.quoteFollowUps.dueAt, now),
 					businessId
 						? eq(schema.quoteFollowUps.businessId, businessId)
@@ -582,7 +585,10 @@ export async function runFollowUps(businessId?: string) {
 export function startFollowUpScheduler() {
 	const g = globalThis as { __qcFollowUps?: ReturnType<typeof setInterval> };
 	if (g.__qcFollowUps) return;
-	g.__qcFollowUps = setInterval(() => void runFollowUps(), 60_000);
+	g.__qcFollowUps = setInterval(() => {
+		void runFollowUps();
+		void import("./billing").then((b) => b.runPaymentReminders());
+	}, 60_000);
 }
 
 // --- Hooks from the quote workflow ---------------------------------------------------------------
@@ -842,8 +848,18 @@ export async function fastForward(businessId: string, days: number) {
 		await tx.execute(
 			sql`update notifications set created_at = created_at - ${shift}, read_at = read_at - ${shift} where business_id = ${businessId}`,
 		);
+		await tx.execute(
+			sql`update invoices set created_at = created_at - ${shift}, issued_at = issued_at - ${shift}, due_at = due_at - ${shift}, paid_at = paid_at - ${shift} where business_id = ${businessId}`,
+		);
+		await tx.execute(
+			sql`update payments set created_at = created_at - ${shift}, paid_at = paid_at - ${shift} where business_id = ${businessId}`,
+		);
+		await tx.execute(
+			sql`update job_tasks set done_at = done_at - ${shift} where job_id in (select id from jobs where business_id = ${businessId})`,
+		);
 	});
 	await runFollowUps(businessId);
+	await (await import("./billing")).runPaymentReminders(businessId);
 	// What happened as a result, for the toast.
 	const happened = await db
 		.select({

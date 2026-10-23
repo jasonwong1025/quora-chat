@@ -583,7 +583,14 @@ const builderSchema = z.object({
 		}),
 	),
 	phases: z.array(z.object({ name: z.string(), weeks: z.number().positive() })),
-	payments: z.array(z.object({ label: z.string(), percent: z.number() })),
+	payments: z.array(
+		z.object({
+			label: z.string(),
+			percent: z.number(),
+			when: z.enum(["signed", "phase", "completed"]),
+			phase: z.string().nullable(),
+		}),
+	),
 	assumptions: z.array(z.string()),
 	exclusions: z.array(z.string()),
 	newQuestions: suggestSchema.shape.questions,
@@ -623,7 +630,12 @@ const builderJsonSchema = obj({
 	},
 	payments: {
 		type: "array",
-		items: obj({ label: str, percent: { type: "number" } }),
+		items: obj({
+			label: str,
+			percent: { type: "number" },
+			when: { type: "string", enum: ["signed", "phase", "completed"] },
+			phase: strOrNull,
+		}),
 	},
 	assumptions: strList,
 	exclusions: strList,
@@ -667,7 +679,7 @@ Build the price list the way this trade really quotes in Malaysia, with realisti
 - charge: "one_time" for the work itself. Use "monthly"/"yearly" only where this trade really charges on a recurring basis (e.g. hosting, maintenance, retainers, licences, subscriptions). Use "optional" for useful extras the customer may add (not in the total). Don't force sections the trade doesn't use.
 - weeks: how much work a one-time part adds, only if this trade quotes a timeline; else null.
 - phases: the stages and base weeks shown on the quotation (e.g. design, build, testing, launch for software; planning, fieldwork, reporting for audit). Empty if this trade doesn't quote timelines.
-- payments: the usual payment schedule for this trade (e.g. 50% deposit, 50% on completion). Percents add up to 100. Empty if it's simply paid in full.
+- payments: the usual payment schedule for this trade (e.g. 50% deposit, 50% on completion). Percents add up to 100. when = "signed" (due when the customer signs, e.g. a deposit), "phase" (due when that phase's work is done; phase = the exact name of one of your phases) or "completed" (when the whole job is done); phase is null unless when is "phase". Empty if the business's usual payment terms apply.
 - rate: the business's typical hourly or daily rate for work not on the list (e.g. software, design, consulting). null if this trade doesn't price by time.
 - assumptions and exclusions: 2-5 short lines each that protect the business (what's included, what's not). Plain English.
 - newQuestions: only questions the price list needs that aren't asked yet (same rules as preset questions: short label, snake_case key, the right type, options for choices). Usually 0-3. Never ask about budget or price. Never add a quantity / "how many pieces" question: the order quantity is asked separately, so price per piece with per "quantity" instead.
@@ -732,6 +744,120 @@ Rules:
 	return result.lines.slice(0, 5);
 }
 
+// --- Billing --------------------------------------------------------------------------
+
+const triggerKinds = ["signed", "completed"] as const;
+const billingSchema = z.object({
+	schedule: z.array(
+		z.object({
+			label: z.string(),
+			percent: z.number(),
+			when: z.enum(triggerKinds),
+		}),
+	),
+	dueDays: z.number(),
+	statement: z.boolean(),
+	completionReport: z.boolean(),
+	reason: z.string(),
+});
+
+/** Suggests how a business in this trade usually gets paid. Staff edit it. */
+export async function suggestBilling(input: {
+	businessName: string;
+	industry: string;
+	products: string[];
+}) {
+	if (isReplay())
+		throw new Error(
+			"Suggesting billing rules needs a live AI model; replay mode only covers the demo script.",
+		);
+	return structured(
+		"billing_rules",
+		obj({
+			schedule: {
+				type: "array",
+				items: obj({
+					label: str,
+					percent: { type: "number" },
+					when: { type: "string", enum: triggerKinds },
+				}),
+			},
+			dueDays: { type: "number" },
+			statement: { type: "boolean" },
+			completionReport: { type: "boolean" },
+			reason: str,
+		}),
+		billingSchema,
+		`You help "${input.businessName}" (${input.industry}, Malaysia) set its default billing for signed quotations, the way small businesses in this trade usually get paid in Malaysia. They sell: ${input.products.join(", ") || "(not listed)"}.
+- schedule: 1-3 instalments that add up to 100%. when = "signed" (paid when the customer signs, e.g. a deposit or pay-upfront) or "completed" (when the work is done). label: short, e.g. "Deposit", "Balance on completion", "Full payment".
+- dueDays: days the customer has to pay an invoice (0-30).
+- statement: true if customers in this trade expect a statement of account (several payments, B2B).
+- completionReport: true if a short report of the work done is useful (services, projects); false for simple goods.
+- reason: one plain sentence for the owner on why.`,
+		"Suggest the billing rules.",
+	);
+}
+
+/** When to remind a customer about an unpaid invoice. Code enforces the limits. */
+export function planPaymentReminder(input: {
+	businessName: string;
+	invoice: string; // "KD-INV-0002 · Balance on completion · RM 4,000.00"
+	daysSinceIssued: number;
+	daysUntilDue: number; // negative = overdue
+	remindersSent: number;
+	maxReminders: number;
+	recentChat: ChatTurn[];
+	now: string;
+}) {
+	if (isReplay())
+		return Promise.resolve({
+			waitHours: input.daysUntilDue > 1 ? (input.daysUntilDue - 1) * 24 : 24,
+			reason: "Replay mode: a day before it's due, then daily.",
+		});
+	return structured(
+		"payment_reminder_timing",
+		obj({ waitHours: { type: "number" }, reason: str }),
+		z.object({ waitHours: z.number(), reason: z.string() }),
+		`You decide when "${input.businessName}" (Malaysia) should next remind a customer about an unpaid invoice. Be polite and considerate: usually a gentle nudge around the due date, then after it's overdue; sooner if the chat shows they said they'd pay soon, later if they asked for time.
+Return waitHours (from now) and a one-sentence reason in plain English for the staff.`,
+		`Now: ${input.now}
+Invoice: ${input.invoice}
+Sent ${input.daysSinceIssued.toFixed(1)} days ago; ${input.daysUntilDue >= 0 ? `due in ${input.daysUntilDue.toFixed(1)} days` : `overdue by ${(-input.daysUntilDue).toFixed(1)} days`}.
+Reminders sent so far: ${input.remindersSent} of max ${input.maxReminders}.
+Recent chat:
+${transcript(input.recentChat.slice(-6))}`,
+		"low",
+	);
+}
+
+/** A short, polite payment reminder. Never threats, penalties or new terms. */
+export async function writePaymentReminder(input: {
+	businessName: string;
+	customerName: string;
+	language: Language;
+	invoice: string;
+	overdue: boolean;
+	reminderNumber: number;
+	recentChat: ChatTurn[];
+}) {
+	if (isReplay()) return "";
+	const res = await getClient().chat.completions.create({
+		model: model(),
+		reasoning_effort: "minimal",
+		messages: [
+			{
+				role: "system",
+				content: `You write a WhatsApp payment reminder for "${input.businessName}" (Malaysia) about invoice ${input.invoice}. Write in ${languageName[input.language]}, like a friendly staff member: 1-2 short sentences, polite, no pressure. Mention they can tap "Review and pay" on the invoice in the chat. Never threaten, never mention penalties, interest or legal action, never change the amount or terms, never say you're an AI. No sign-off. If you use their name (${input.customerName}), write it exactly. Plain text.`,
+			},
+			{
+				role: "user",
+				content: `Recent chat:\n${transcript(input.recentChat.slice(-6))}\n\nReminder #${input.reminderNumber}. The invoice is ${input.overdue ? "past its due date" : "due soon"}.\n\nWrite only the message.`,
+			},
+		],
+	});
+	return res.choices[0]?.message?.content?.trim() || "";
+}
+
 // --- Handover to the PIC --------------------------------------------------------------
 
 /** Everything the business knows about one signed job, as plain text for the AI. */
@@ -748,6 +874,8 @@ export type JobContext = {
 	/** The WhatsApp conversation; ref is a short id the AI can cite. */
 	chat: { ref: string; who: string; at: string; body: string }[];
 	catalog: string[]; // descriptions of the products involved
+	/** The signed quotation's phases (empty if it has no timeline). */
+	phases: string[];
 	/** Internal knowledge-base passages relevant to this job (SOPs, policies). */
 	knowledge?: Passage[];
 };
@@ -762,6 +890,7 @@ ${c.brief.map((l) => `- ${l}`).join("\n") || "(none)"}
 
 Signed quotation:
 ${c.quote.map((l) => `- ${l}`).join("\n") || "(none)"}
+Quotation phases: ${c.phases.length ? c.phases.join(" → ") : "(none)"}
 
 Files the customer sent:
 ${c.files.map((f) => `- [${f.ref}] ${f.name}`).join("\n") || "(none)"}
@@ -782,7 +911,7 @@ const handoverSchema = z.object({
 	timeline: z.string().nullable(),
 	watchOuts: z.array(z.string()),
 	customerNotes: z.string().nullable(),
-	tasks: z.array(z.string()),
+	tasks: z.array(z.object({ title: z.string(), phase: z.string().nullable() })),
 });
 
 export type HandoverDraft = z.infer<typeof handoverSchema>;
@@ -804,7 +933,7 @@ export function writeHandover(c: JobContext): Promise<HandoverDraft> {
 			timeline: strOrNull,
 			watchOuts: strList,
 			customerNotes: strOrNull,
-			tasks: strList,
+			tasks: { type: "array", items: obj({ title: str, phase: strOrNull }) },
 		}),
 		handoverSchema,
 		`You brief the person in charge (PIC) who will deliver a job a customer just signed for. The PIC never talks to the customer and wasn't in the chat, so give them everything they need. Write in plain, specific English. Only use facts from the context; never invent details or prices.
@@ -818,7 +947,7 @@ Return:
 - timeline: the deadline or timing in the customer's words, or null.
 - watchOuts: risks, open points, vague answers, things to confirm. Empty if none.
 - customerNotes: how to deal with them (language, tone, anything notable), or null.
-- tasks: 3-8 concrete first tasks for the PIC, verb first (e.g. "Set up the staging environment"). The PIC must not contact the customer directly: anything that needs the customer becomes "Ask the customer (via sales): …". Stock on the quote is already reserved automatically when the customer signed, so don't add tasks to reserve or check stock.`,
+- tasks: the job's task list, 4-12 concrete tasks, verb first (e.g. "Set up the staging environment"), covering the whole job up to handing it over to the customer. The job completes (and the customer is billed) automatically when every task is done, so end with the final delivery or handover task. If the quotation has phases, set each task's phase to the exact phase name it belongs to and give every phase at least one task; otherwise phase is null. The PIC must not contact the customer directly: anything that needs the customer becomes "Ask the customer (via sales): …". Stock on the quote is already reserved automatically when the customer signed, so don't add tasks to reserve or check stock. Billing is automatic too (invoices, payment reminders and receipts go to the customer in WhatsApp on their own), so don't add tasks to invoice, collect, chase or confirm payment.`,
 		contextText(c),
 	);
 }

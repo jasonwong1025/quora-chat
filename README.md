@@ -26,6 +26,12 @@ Requirements are versioned. Unclear/conflicting answers and unresolved follow-up
 
 Signing and stock reservations commit together. A database-backed worker creates the job and handover with retries. Signed revisions for active custom projects reuse the project, preserve completed tasks, and require PIC review of the changed scope. See [implementation, migration and operations](docs/requirements-agreement-workflow.md).
 
+## Billing after signing
+
+Every quotation states its payment schedule. Each instalment has a trigger: **on signing** (deposit or pay upfront), **after a phase** (when every task in that quotation phase is done) or **on completion**. Custom items take the schedule from their price list; everything else uses the business's **Billing rules** (Quotes → Billing rules, with an AI "suggest for my trade").
+
+It runs on its own: signing invoices the on-signing part; finishing a phase's tasks invoices that phase; ticking the last task completes the job and sends the completion report, the final invoice and the statement of account (as the business chooses). The customer pays in WhatsApp from the invoice card (**Review and pay → Proceed to pay → Send payment**, a simulated saved card, no real gateway), or staff record a bank transfer or cash payment on the job's **Billing** tab. Every payment gets an official receipt PDF. Unpaid invoices get polite AI-timed reminders within the business's limits; once everything is paid the job closes.
+
 ## Two sides of the demo
 
 | URL | Who you are | What it is |

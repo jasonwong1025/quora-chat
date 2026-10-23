@@ -8,6 +8,7 @@ import { getDb, schema } from "../../src/db/index";
 import { quoteReviewToken } from "../../src/lib/agreements";
 import { emptyBrief } from "../../src/lib/intake";
 import type { Reading } from "../../src/server/ai";
+import { payInvoice } from "../../src/server/billing";
 import { followUpAction, markLost } from "../../src/server/followups";
 import {
 	addJobMember,
@@ -88,7 +89,7 @@ const server = createServer(async (req, res) => {
 						"Review the approved requirements",
 						"Plan the work",
 						"Prepare the first delivery",
-					],
+					].map((title) => ({ title, phase: null })),
 				});
 	}
 	if (name === "follow_up_timing")
@@ -2058,4 +2059,86 @@ test("a relative deadline from the model is stored as a real date", async () => 
 	assert.deepEqual(after?.brief.general.needed_by?.values, [
 		resolveRelativeDate("Jumaat depan", todayMY()),
 	]);
+});
+
+test("billing: deposit on signing, balance and documents on completion, receipts, then closed", async () => {
+	const s = await scenario();
+	const db = getDb();
+	await db
+		.update(schema.businesses)
+		.set({
+			billing: {
+				schedule: [
+					{ label: "Deposit", percent: 50, when: "signed" },
+					{ label: "Balance", percent: 50, when: "completed" },
+				],
+				dueDays: 7,
+				statement: true,
+				completionReport: true,
+			},
+		})
+		.where(eq(schema.businesses.id, s.businessId));
+	const quote = await approve(s);
+	assert.equal(
+		quote.terms?.payments.length,
+		2,
+		"the quote states how it's paid",
+	);
+	await signQuote(signature(quote.id));
+	const invoicesOf = () =>
+		db
+			.select()
+			.from(schema.invoices)
+			.where(eq(schema.invoices.quoteId, quote.id));
+	assert.deepEqual(
+		(await invoicesOf()).map((i) => i.label),
+		["Deposit"],
+	);
+
+	await runNextTask();
+	await runNextTask();
+	const job = await db.query.jobs.findFirst({
+		where: eq(schema.jobs.quoteId, quote.id),
+	});
+	assert.ok(job);
+	const tasks = await db
+		.select()
+		.from(schema.jobTasks)
+		.where(eq(schema.jobTasks.jobId, job.id));
+	for (const t of tasks) await updateTask({ taskId: t.id, status: "done" });
+	const completed = await db.query.jobs.findFirst({
+		where: eq(schema.jobs.id, job.id),
+	});
+	assert.equal(
+		completed?.status,
+		"completed",
+		"the last task completes the job",
+	);
+	const invoices = await invoicesOf();
+	assert.equal(invoices.length, 2);
+	assert.equal(
+		invoices.reduce((sum, i) => sum + i.amountSen, 0),
+		quote.totalSen,
+	);
+	const docs = await db
+		.select({ document: schema.messages.document })
+		.from(schema.messages)
+		.where(eq(schema.messages.conversationId, s.conversation.id));
+	assert.deepEqual(
+		docs.flatMap((d) => (d.document ? [d.document.kind] : [])).sort(),
+		["completion_report", "statement"],
+	);
+
+	for (const i of invoices)
+		await payInvoice({ invoiceId: i.id, card: "Visa •1234" });
+	await assert.rejects(
+		payInvoice({ invoiceId: invoices[0].id, card: "Visa •1234" }),
+		/already paid/,
+	);
+	const receipts = await db.select().from(schema.payments);
+	assert.equal(new Set(receipts.map((r) => r.receiptNumber)).size, 2);
+	const closed = await db.query.jobs.findFirst({
+		where: eq(schema.jobs.id, job.id),
+	});
+	assert.equal(closed?.status, "closed", "fully paid and done closes the job");
 });

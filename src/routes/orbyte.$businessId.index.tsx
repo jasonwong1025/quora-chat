@@ -42,6 +42,10 @@ function Home() {
 		...orpc.esign.list.queryOptions(input),
 		refetchInterval: 4000,
 	});
+	const money = useQuery({
+		...orpc.billing.overview.queryOptions(input),
+		refetchInterval: 4000,
+	});
 
 	const r = requests.data ?? [];
 	const attention = r.filter((x) =>
@@ -85,6 +89,16 @@ function Home() {
 			to: "/orbyte/$businessId/esign" as const,
 		},
 		{
+			label: "Outstanding",
+			value: formatMYR(money.data?.outstandingSen ?? 0),
+			hint: money.data?.overdueCount
+				? `${money.data.overdueCount} overdue · ${formatMYR(money.data.overdueSen)}`
+				: money.data?.count
+					? `${money.data.count} unpaid invoice${money.data.count === 1 ? "" : "s"}`
+					: undefined,
+			to: "/orbyte/$businessId/work" as const,
+		},
+		{
 			label: "Lost",
 			value: lost.length,
 			hint: reasons.length
@@ -99,7 +113,8 @@ function Home() {
 		to:
 			| "/orbyte/$businessId/inbox"
 			| "/orbyte/$businessId/quotes"
-			| "/orbyte/$businessId/esign";
+			| "/orbyte/$businessId/esign"
+			| "/orbyte/$businessId/work";
 	}[];
 
 	const modules = [
@@ -162,13 +177,13 @@ function Home() {
 				</p>
 			</header>
 
-			<div className="grid grid-cols-2 gap-px border bg-border sm:grid-cols-5">
+			<div className="grid grid-cols-2 gap-px border bg-border sm:grid-cols-3 xl:grid-cols-6">
 				{stats.map((s) => (
 					<Link
 						key={s.label}
 						to={s.to}
 						params={{ businessId: business.id }}
-						className="bg-card px-4 py-3 transition-colors last:col-span-2 hover:bg-muted/40 sm:last:col-span-1"
+						className="bg-card px-4 py-3 transition-colors hover:bg-muted/40"
 					>
 						<p className="text-[11px] font-medium tracking-wide text-muted-foreground uppercase">
 							{s.label}

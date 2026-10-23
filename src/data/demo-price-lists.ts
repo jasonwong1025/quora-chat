@@ -103,9 +103,14 @@ export const demoPriceLists: Record<string, PriceBuilder> = {
 			{ name: "Launch", weeks: 1 },
 		],
 		payments: [
-			{ label: "Deposit on signing", percent: 40 },
-			{ label: "After testing (UAT) sign-off", percent: 40 },
-			{ label: "On launch", percent: 20 },
+			{ label: "Deposit on signing", percent: 40, when: "signed" },
+			{
+				label: "After testing (UAT) sign-off",
+				percent: 40,
+				when: "phase",
+				phase: "Testing (UAT)",
+			},
+			{ label: "On launch", percent: 20, when: "completed" },
 		],
 		assumptions: [
 			"One round of design revisions per screen",
@@ -151,8 +156,8 @@ export const demoPriceLists: Record<string, PriceBuilder> = {
 			{ name: "Testing & launch", weeks: 1 },
 		],
 		payments: [
-			{ label: "Deposit on signing", percent: 50 },
-			{ label: "On launch", percent: 50 },
+			{ label: "Deposit on signing", percent: 50, when: "signed" },
+			{ label: "On launch", percent: 50, when: "completed" },
 		],
 		assumptions: [
 			"Product photos and descriptions supplied by you",
@@ -224,9 +229,14 @@ export const demoPriceLists: Record<string, PriceBuilder> = {
 			{ name: "Go-live", weeks: 1 },
 		],
 		payments: [
-			{ label: "Deposit on signing", percent: 30 },
-			{ label: "Mid-project demo", percent: 40 },
-			{ label: "On go-live", percent: 30 },
+			{ label: "Deposit on signing", percent: 30, when: "signed" },
+			{
+				label: "Mid-project demo",
+				percent: 40,
+				when: "phase",
+				phase: "Build",
+			},
+			{ label: "On go-live", percent: 30, when: "completed" },
 		],
 		assumptions: [
 			"Workflow as described in the requirements below",
@@ -275,8 +285,13 @@ export const demoPriceLists: Record<string, PriceBuilder> = {
 			{ name: "Reporting & sign-off", weeks: 2 },
 		],
 		payments: [
-			{ label: "On engagement", percent: 50 },
-			{ label: "Before the audit report is issued", percent: 50 },
+			{ label: "On engagement", percent: 50, when: "signed" },
+			{
+				label: "Before the audit report is issued",
+				percent: 50,
+				when: "phase",
+				phase: "Fieldwork",
+			},
 		],
 		assumptions: [
 			"Books are closed and the trial balance is ready before fieldwork",
@@ -316,8 +331,8 @@ export const demoPriceLists: Record<string, PriceBuilder> = {
 			{ name: "Waterproofing & curing", weeks: 1 },
 		],
 		payments: [
-			{ label: "Deposit to book the date", percent: 50 },
-			{ label: "On completion", percent: 50 },
+			{ label: "Deposit to book the date", percent: 50, when: "signed" },
+			{ label: "On completion", percent: 50, when: "completed" },
 		],
 		assumptions: [
 			"Area size confirmed during the site inspection",

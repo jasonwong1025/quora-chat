@@ -2,7 +2,7 @@
  * Synthetic, team-created demo data. Every business, person, address, phone
  * number and price here is fictional. SST rates are illustrative only.
  */
-import type { PricingRuleConfig, ShowIf } from "#/db/schema";
+import type { BillingSettings, PricingRuleConfig, ShowIf } from "#/db/schema";
 
 type QuestionType =
 	| "text"
@@ -63,6 +63,8 @@ type DemoBusiness = {
 	openingHours: string;
 	sstRateBps: number;
 	quoteValidityDays: number;
+	/** How the business gets paid and which documents it sends after a job. */
+	billing: BillingSettings;
 	staff: { name: string; role: string; canApprove: boolean }[];
 	/** Who gets the job when a quote in this category is signed (staff name). */
 	categoryPics: Record<string, string>;
@@ -134,6 +136,12 @@ export const demoBusinesses: DemoBusiness[] = [
 		openingHours: "Mon–Sat 9am–7pm",
 		sstRateBps: 800,
 		quoteValidityDays: 14,
+		billing: {
+			schedule: [{ label: "Full payment", percent: 100, when: "signed" }],
+			dueDays: 3,
+			statement: false,
+			completionReport: false,
+		},
 		staff: [
 			{ name: "Aina Rahman", role: "Owner", canApprove: true },
 			{ name: "Lim Wei Jie", role: "Counter staff", canApprove: false },
@@ -482,6 +490,14 @@ export const demoBusinesses: DemoBusiness[] = [
 		openingHours: "Mon–Sat 9am–6pm, Sun by appointment",
 		sstRateBps: 800,
 		quoteValidityDays: 7,
+		billing: {
+			schedule: [
+				{ label: "Payment on completion", percent: 100, when: "completed" },
+			],
+			dueDays: 3,
+			statement: false,
+			completionReport: true,
+		},
 		staff: [
 			{ name: "Kumar Selvam", role: "Owner", canApprove: true },
 			{ name: "Nurul Izzah", role: "Admin", canApprove: true },
@@ -716,6 +732,15 @@ export const demoBusinesses: DemoBusiness[] = [
 		openingHours: "Mon–Sat 8:30am–6pm",
 		sstRateBps: 600,
 		quoteValidityDays: 30,
+		billing: {
+			schedule: [
+				{ label: "Deposit", percent: 50, when: "signed" },
+				{ label: "Balance on completion", percent: 50, when: "completed" },
+			],
+			dueDays: 7,
+			statement: true,
+			completionReport: true,
+		},
 		staff: [
 			{ name: "Farid Ismail", role: "Owner", canApprove: true },
 			{ name: "Grace Wong", role: "Coordinator", canApprove: false },
@@ -1002,6 +1027,15 @@ export const demoBusinesses: DemoBusiness[] = [
 		openingHours: "Mon–Fri 9am–6pm",
 		sstRateBps: 800,
 		quoteValidityDays: 30,
+		billing: {
+			schedule: [
+				{ label: "Deposit", percent: 50, when: "signed" },
+				{ label: "Balance on completion", percent: 50, when: "completed" },
+			],
+			dueDays: 14,
+			statement: true,
+			completionReport: true,
+		},
 		staff: [
 			{ name: "Hakim Zulkifli", role: "Founder", canApprove: true },
 			{ name: "Priya Nair", role: "Project manager", canApprove: true },
@@ -1434,6 +1468,15 @@ export const demoBusinesses: DemoBusiness[] = [
 		openingHours: "Mon–Fri 8:30am–5:30pm",
 		sstRateBps: 800,
 		quoteValidityDays: 30,
+		billing: {
+			schedule: [
+				{ label: "On engagement", percent: 50, when: "signed" },
+				{ label: "Balance on completion", percent: 50, when: "completed" },
+			],
+			dueDays: 14,
+			statement: true,
+			completionReport: false,
+		},
 		staff: [
 			{ name: "Nor Aisyah Kamal", role: "Audit partner", canApprove: true },
 			{ name: "Tan Mei Xin", role: "Tax manager", canApprove: true },

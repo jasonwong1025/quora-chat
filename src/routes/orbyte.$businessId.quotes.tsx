@@ -1,8 +1,9 @@
 import { useQuery } from "@tanstack/react-query";
 import { createFileRoute, Link } from "@tanstack/react-router";
-import { FileText, MessagesSquare, Settings2 } from "lucide-react";
+import { FileText, MessagesSquare, Settings2, Wallet } from "lucide-react";
 import { useState } from "react";
 import { z } from "zod";
+import { BillingRules } from "#/components/orbyte/billing-rules";
 import { FollowUpRules } from "#/components/orbyte/follow-up-rules";
 import { RequestDetail } from "#/components/orbyte/request-detail";
 import { useWorkspace } from "#/components/orbyte/workspace";
@@ -51,6 +52,7 @@ function Quotes() {
 	const navigate = Route.useNavigate();
 	const [filter, setFilter] = useState<keyof typeof filters>("all");
 	const [rules, setRules] = useState(false);
+	const [billingRules, setBillingRules] = useState(false);
 	const requests = useQuery({
 		...orpc.requests.list.queryOptions({ input: { businessId: business.id } }),
 		refetchInterval: 3000,
@@ -69,15 +71,27 @@ function Quotes() {
 				<div className="border-b px-4 pt-3 pb-2">
 					<div className="flex items-center justify-between">
 						<h1 className="font-semibold">Quotes</h1>
-						<button
-							type="button"
-							onClick={() => setRules(true)}
-							className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
-						>
-							<Settings2 className="size-3.5" /> Follow-up rules
-						</button>
+						<span className="flex gap-3">
+							<button
+								type="button"
+								onClick={() => setBillingRules(true)}
+								className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
+							>
+								<Wallet className="size-3.5" /> Billing rules
+							</button>
+							<button
+								type="button"
+								onClick={() => setRules(true)}
+								className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
+							>
+								<Settings2 className="size-3.5" /> Follow-up rules
+							</button>
+						</span>
 					</div>
 					{rules && <FollowUpRules onClose={() => setRules(false)} />}
+					{billingRules && (
+						<BillingRules onClose={() => setBillingRules(false)} />
+					)}
 					<div className="mt-2 flex gap-1 overflow-x-auto pb-1">
 						{Object.entries(filters).map(([key, f]) => {
 							const n = (requests.data ?? []).filter(f.test).length;

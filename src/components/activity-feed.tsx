@@ -14,6 +14,9 @@ const tone: Record<string, string> = {
 	"quote.approved": "bg-status-approved",
 	"quote.rejected": "bg-status-rejected",
 	"quote.sent_to_customer": "bg-status-approved",
+	"invoice.sent": "bg-status-draft",
+	"payment.received": "bg-status-approved",
+	"document.sent": "bg-status-draft",
 };
 
 export function ActivityFeed({

@@ -571,25 +571,10 @@ function PriceListDialog(props: {
 							}
 							blank={{ text: "New phase", n: 1 }}
 						/>
-						<RowsEditor
-							title="Payment schedule"
-							hint="Percents add up to 100. Leave empty for payment in full."
-							rows={b.payments.map((p) => ({ text: p.label, n: p.percent }))}
-							nLabel="%"
-							nFirst
-							onChange={(rows) =>
-								setB((x) => ({
-									...x,
-									payments: rows.map((r) => ({ label: r.text, percent: r.n })),
-								}))
-							}
-							blank={{
-								text: "On completion",
-								n: Math.max(
-									1,
-									100 - b.payments.reduce((s, p) => s + p.percent, 0),
-								),
-							}}
+						<PaymentRows
+							payments={b.payments}
+							phases={b.phases.map((ph) => ph.name).filter(Boolean)}
+							onChange={(payments) => setB((x) => ({ ...x, payments }))}
 						/>
 					</div>
 
@@ -771,6 +756,108 @@ function RowsEditor(props: {
 				variant="outline"
 				size="sm"
 				onClick={() => props.onChange([...props.rows, props.blank])}
+			>
+				<Plus className="size-4" /> Add
+			</Button>
+		</section>
+	);
+}
+
+/** Payment schedule rows: how much, what it's called, and what makes it due. */
+function PaymentRows(props: {
+	payments: PriceBuilder["payments"];
+	phases: string[];
+	onChange: (payments: PriceBuilder["payments"]) => void;
+}) {
+	const set = (i: number, change: Partial<PriceBuilder["payments"][number]>) =>
+		props.onChange(
+			props.payments.map((p, idx) => (idx === i ? { ...p, ...change } : p)),
+		);
+	return (
+		<section className="space-y-1.5">
+			<p className="font-medium">Payment schedule</p>
+			<p className="text-xs text-muted-foreground">
+				Percents add up to 100. Leave empty to use the business's billing rules.
+			</p>
+			{props.payments.map((p, i) => (
+				// biome-ignore lint/suspicious/noArrayIndexKey: rows have no id
+				<div key={i} className="flex items-center gap-2">
+					<Input
+						aria-label={`Payment ${i + 1} percent`}
+						type="number"
+						min={1}
+						value={p.percent}
+						onChange={(e) =>
+							set(i, {
+								percent: Math.max(1, Math.round(Number(e.target.value)) || 1),
+							})
+						}
+						className="h-8 w-16 text-right"
+					/>
+					<span className="text-xs text-muted-foreground">%</span>
+					<Input
+						aria-label={`Payment ${i + 1} name`}
+						value={p.label}
+						onChange={(e) => set(i, { label: e.target.value })}
+						className="h-8 min-w-0 flex-1"
+					/>
+					<Select
+						value={
+							p.when === "phase" && p.phase
+								? `phase:${p.phase}`
+								: (p.when ?? "completed")
+						}
+						onValueChange={(v) =>
+							set(
+								i,
+								v.startsWith("phase:")
+									? { when: "phase", phase: v.slice(6) }
+									: { when: v as "signed" | "completed", phase: null },
+							)
+						}
+					>
+						<SelectTrigger size="sm" className="w-36" aria-label="Due">
+							<SelectValue />
+						</SelectTrigger>
+						<SelectContent position="popper">
+							<SelectItem value="signed">On signing</SelectItem>
+							{props.phases.map((name) => (
+								<SelectItem key={name} value={`phase:${name}`}>
+									After {name}
+								</SelectItem>
+							))}
+							<SelectItem value="completed">On completion</SelectItem>
+						</SelectContent>
+					</Select>
+					<Button
+						variant="ghost"
+						size="icon"
+						className="size-8"
+						aria-label={`Remove payment ${i + 1}`}
+						onClick={() =>
+							props.onChange(props.payments.filter((_, idx) => idx !== i))
+						}
+					>
+						<Trash2 className="size-4" />
+					</Button>
+				</div>
+			))}
+			<Button
+				variant="outline"
+				size="sm"
+				onClick={() =>
+					props.onChange([
+						...props.payments,
+						{
+							label: "On completion",
+							percent: Math.max(
+								1,
+								100 - props.payments.reduce((s, x) => s + x.percent, 0),
+							),
+							when: "completed",
+						},
+					])
+				}
 			>
 				<Plus className="size-4" /> Add
 			</Button>

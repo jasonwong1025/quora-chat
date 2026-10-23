@@ -4,6 +4,12 @@ import { eq } from "drizzle-orm";
 import { Hono } from "hono";
 import { getDb, schema } from "#/db";
 import router from "#/orpc/router";
+import {
+	renderCompletionReportPdf,
+	renderInvoicePdf,
+	renderReceiptPdf,
+	renderStatementPdf,
+} from "./billing-pdf";
 import { startFollowUpScheduler } from "./followups";
 import { renderQuotePdf } from "./quote-pdf";
 
@@ -64,6 +70,23 @@ app.get("/messages/:id/attachment", async (c) => {
 		"Content-Type": match[1],
 		"Content-Disposition": `inline; filename="${name}"`,
 		"Cache-Control": "private, max-age=31536000, immutable",
+	});
+});
+
+/** Billing documents sent in the chat: invoice, receipt, statement, completion report. */
+app.get("/documents/:kind/:id", async (c) => {
+	const id = c.req.param("id");
+	const render = {
+		invoice: renderInvoicePdf,
+		receipt: renderReceiptPdf,
+		statement: renderStatementPdf,
+		completion_report: renderCompletionReportPdf,
+	}[c.req.param("kind")];
+	const doc = render ? await render(id) : null;
+	if (!doc) return c.notFound();
+	return c.body(new Uint8Array(doc.buffer), 200, {
+		"Content-Type": "application/pdf",
+		"Content-Disposition": `inline; filename="${doc.name}"`,
 	});
 });
 

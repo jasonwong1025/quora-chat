@@ -28,6 +28,7 @@ import {
 import { Fragment, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { z } from "zod";
+import { BillingTab } from "#/components/orbyte/billing-tab";
 import {
 	JobStatusChip,
 	jobStatuses,
@@ -70,12 +71,14 @@ import { orpc } from "#/orpc/client";
 
 export const Route = createFileRoute("/orbyte/$businessId/work/$jobId")({
 	validateSearch: z.object({
-		tab: z.enum(["handover", "tasks", "chat", "quote", "team"]).optional(),
+		tab: z
+			.enum(["handover", "tasks", "billing", "chat", "quote", "team"])
+			.optional(),
 	}),
 	component: JobPage,
 });
 
-type Tab = "handover" | "tasks" | "chat" | "quote" | "team";
+type Tab = "handover" | "tasks" | "billing" | "chat" | "quote" | "team";
 
 /** oRPC errors carry a code; checked by value so server- and client-side errors both match. */
 const isNotFound = (err: unknown) =>
@@ -148,6 +151,7 @@ function JobPage() {
 								"tasks",
 								`Tasks (${j.tasks.filter((t) => t.status !== "done").length})`,
 							],
+							["billing", "Billing"],
 							["chat", "Customer chat"],
 							["quote", "Quote & files"],
 							["team", "Team chat"],
@@ -172,6 +176,7 @@ function JobPage() {
 						<HandoverTab job={j} onShowMessage={showMessage} />
 					)}
 					{tab === "tasks" && <TasksTab job={j} />}
+					{tab === "billing" && <BillingTab jobId={j.id} />}
 					{tab === "chat" && (
 						<ChatTab
 							job={j}
@@ -642,6 +647,106 @@ function TasksTab({ job }: { job: JobDetail }) {
 		orpc.jobs.tasks.delete.mutationOptions({ onSuccess: refresh }),
 	);
 	const [title, setTitle] = useState("");
+	const phases = (job.quote.terms?.phases ?? []).map((p) => p.name);
+	const groups = phases.length
+		? [
+				...phases.map((name) => ({
+					name,
+					tasks: job.tasks.filter((t) => t.phase === name),
+				})),
+				{
+					name: "Other",
+					tasks: job.tasks.filter((t) => !t.phase || !phases.includes(t.phase)),
+				},
+			].filter((g) => g.tasks.length || g.name !== "Other")
+		: [{ name: null, tasks: job.tasks }];
+	// New tasks go into the first phase that isn't finished yet.
+	const openPhase =
+		phases.find((name) =>
+			job.tasks.some((t) => t.phase === name && t.status !== "done"),
+		) ?? phases[0];
+	const [phase, setPhase] = useState<string | undefined>(undefined);
+	const row = (t: JobDetail["tasks"][number]) => {
+		const Icon = taskIcon[t.status];
+		return (
+			<li key={t.id} className="flex items-start gap-3 px-4 py-3">
+				<button
+					type="button"
+					title={t.status === "done" ? "Mark not done" : "Mark done"}
+					aria-label={t.status === "done" ? "Mark not done" : "Mark done"}
+					onClick={() =>
+						update.mutate({
+							taskId: t.id,
+							status: t.status === "done" ? "todo" : "done",
+						})
+					}
+					className="-m-1.5 mt-[-0.25rem] rounded-md p-1.5 hover:bg-muted"
+				>
+					<Icon
+						className={cn(
+							"size-4",
+							t.status === "done" && "text-status-approved",
+							t.status === "blocked" && "text-status-review",
+							t.status === "active" && "text-status-draft",
+							t.status === "todo" && "text-muted-foreground",
+						)}
+					/>
+				</button>
+				<div className="min-w-0 flex-1">
+					<p
+						className={cn(
+							"text-sm",
+							t.status === "done" && "text-muted-foreground line-through",
+						)}
+					>
+						{t.title}
+					</p>
+					{t.note && (
+						<p className="mt-0.5 text-xs text-status-review">
+							Blocked: {t.note}
+						</p>
+					)}
+					{t.source !== "staff" && (
+						<p className="mt-0.5 inline-flex items-center gap-1 text-[10px] text-[var(--orb-royal)]">
+							<Sparkles className="size-3" />
+							{t.source === "ai"
+								? "From the handover"
+								: "Suggested by the assistant"}
+						</p>
+					)}
+				</div>
+				<Select
+					value={t.status}
+					onValueChange={(v) =>
+						update.mutate({
+							taskId: t.id,
+							status: v as "todo",
+							...(v !== "blocked" ? { note: null } : {}),
+						})
+					}
+				>
+					<SelectTrigger size="sm" className="w-28">
+						<SelectValue />
+					</SelectTrigger>
+					<SelectContent position="popper">
+						<SelectItem value="todo">To do</SelectItem>
+						<SelectItem value="active">Active</SelectItem>
+						<SelectItem value="blocked">Blocked</SelectItem>
+						<SelectItem value="done">Done</SelectItem>
+					</SelectContent>
+				</Select>
+				<button
+					type="button"
+					title="Delete task"
+					aria-label="Delete task"
+					onClick={() => remove.mutate({ taskId: t.id })}
+					className="-m-1.5 mt-0 rounded-md p-1.5 text-muted-foreground hover:bg-muted hover:text-foreground"
+				>
+					<Trash2 className="size-3.5" />
+				</button>
+			</li>
+		);
+	};
 
 	return (
 		<div className="mx-auto max-w-3xl space-y-3">
@@ -650,7 +755,12 @@ function TasksTab({ job }: { job: JobDetail }) {
 				onSubmit={async (e) => {
 					e.preventDefault();
 					if (!title.trim() || !me) return;
-					await add.mutateAsync({ jobId: job.id, staffId: me.id, title });
+					await add.mutateAsync({
+						jobId: job.id,
+						staffId: me.id,
+						title,
+						phase: phases.length ? (phase ?? openPhase ?? null) : null,
+					});
 					setTitle("");
 				}}
 			>
@@ -660,92 +770,39 @@ function TasksTab({ job }: { job: JobDetail }) {
 					placeholder="Add a task…"
 					className="bg-card"
 				/>
+				{phases.length > 0 && (
+					<Select value={phase ?? openPhase} onValueChange={setPhase}>
+						<SelectTrigger className="w-44 bg-card" aria-label="Phase">
+							<SelectValue />
+						</SelectTrigger>
+						<SelectContent position="popper">
+							{phases.map((name) => (
+								<SelectItem key={name} value={name}>
+									{name}
+								</SelectItem>
+							))}
+						</SelectContent>
+					</Select>
+				)}
 				<Button disabled={!title.trim() || add.isPending}>
 					<Plus className="size-4" /> Add
 				</Button>
 			</form>
 			<ul className="divide-y rounded-xl border bg-card">
-				{job.tasks.map((t) => {
-					const Icon = taskIcon[t.status];
-					return (
-						<li key={t.id} className="flex items-start gap-3 px-4 py-3">
-							<button
-								type="button"
-								title={t.status === "done" ? "Mark not done" : "Mark done"}
-								aria-label={t.status === "done" ? "Mark not done" : "Mark done"}
-								onClick={() =>
-									update.mutate({
-										taskId: t.id,
-										status: t.status === "done" ? "todo" : "done",
-									})
-								}
-								className="-m-1.5 mt-[-0.25rem] rounded-md p-1.5 hover:bg-muted"
-							>
-								<Icon
-									className={cn(
-										"size-4",
-										t.status === "done" && "text-status-approved",
-										t.status === "blocked" && "text-status-review",
-										t.status === "active" && "text-status-draft",
-										t.status === "todo" && "text-muted-foreground",
-									)}
-								/>
-							</button>
-							<div className="min-w-0 flex-1">
-								<p
-									className={cn(
-										"text-sm",
-										t.status === "done" && "text-muted-foreground line-through",
-									)}
-								>
-									{t.title}
-								</p>
-								{t.note && (
-									<p className="mt-0.5 text-xs text-status-review">
-										Blocked: {t.note}
-									</p>
-								)}
-								{t.source !== "staff" && (
-									<p className="mt-0.5 inline-flex items-center gap-1 text-[10px] text-[var(--orb-royal)]">
-										<Sparkles className="size-3" />
-										{t.source === "ai"
-											? "From the handover"
-											: "Suggested by the assistant"}
-									</p>
-								)}
-							</div>
-							<Select
-								value={t.status}
-								onValueChange={(v) =>
-									update.mutate({
-										taskId: t.id,
-										status: v as "todo",
-										...(v !== "blocked" ? { note: null } : {}),
-									})
-								}
-							>
-								<SelectTrigger size="sm" className="w-28">
-									<SelectValue />
-								</SelectTrigger>
-								<SelectContent position="popper">
-									<SelectItem value="todo">To do</SelectItem>
-									<SelectItem value="active">Active</SelectItem>
-									<SelectItem value="blocked">Blocked</SelectItem>
-									<SelectItem value="done">Done</SelectItem>
-								</SelectContent>
-							</Select>
-							<button
-								type="button"
-								title="Delete task"
-								aria-label="Delete task"
-								onClick={() => remove.mutate({ taskId: t.id })}
-								className="-m-1.5 mt-0 rounded-md p-1.5 text-muted-foreground hover:bg-muted hover:text-foreground"
-							>
-								<Trash2 className="size-3.5" />
-							</button>
-						</li>
-					);
-				})}
+				{groups.map((g) => (
+					<Fragment key={g.name ?? "all"}>
+						{g.name && (
+							<li className="flex items-center justify-between bg-muted/40 px-4 py-1.5 text-xs font-semibold tracking-wide text-muted-foreground uppercase">
+								<span>{g.name}</span>
+								<span className="font-normal tabular-nums normal-case">
+									{g.tasks.filter((x) => x.status === "done").length}/
+									{g.tasks.length} done
+								</span>
+							</li>
+						)}
+						{g.tasks.map(row)}
+					</Fragment>
+				))}
 				{job.tasks.length === 0 && (
 					<li className="p-6 text-center text-sm text-muted-foreground">
 						No tasks yet.

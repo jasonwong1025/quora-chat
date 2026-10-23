@@ -448,7 +448,8 @@ export function replayHandover(c: JobContext): HandoverDraft {
 				: ["Ask the customer (via sales): send the artwork file"]),
 			...(c.knowledge ?? []).slice(0, 2).map((k) => `Follow ${k.title}`),
 			...(deadline ? [`Confirm the schedule to be ready by ${deadline}`] : []),
-		],
+			"Deliver and hand over to the customer",
+		].map((title) => ({ title, phase: null })),
 	};
 }
 

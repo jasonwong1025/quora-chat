@@ -27,6 +27,7 @@ import { cn } from "#/lib/utils";
 import type { WaProfile } from "#/lib/wa-profile";
 import { client, orpc } from "#/orpc/client";
 import { WaAvatar } from "./avatar";
+import { DocLink, InvoiceCard, PayButton, PaymentCard, PaySheet } from "./pay";
 
 type QuoteInfo = ConversationDetail["quotes"][number];
 type Message = ConversationDetail["messages"][number];
@@ -73,6 +74,7 @@ export function ChatWindow(props: {
 	const [file, setFile] = useState<Outgoing | null>(null);
 	const [typing, setTyping] = useState(false);
 	const [draft, setDraft] = useState("");
+	const [payingId, setPayingId] = useState<string | null>(null);
 
 	useEffect(
 		() => setConversationId(props.conversationId),
@@ -162,8 +164,19 @@ export function ChatWindow(props: {
 					.find((s) => !said.has(scriptKey(s.say)))
 			: undefined;
 
+	const paying = payingId
+		? conversation.data?.invoices.find((x) => x.id === payingId)
+		: undefined;
+
 	return (
-		<div className="flex h-full min-w-0 flex-col">
+		<div className="relative flex h-full min-w-0 flex-col">
+			{paying && (
+				<PaySheet
+					invoice={paying}
+					businessName={business.name}
+					onClose={() => setPayingId(null)}
+				/>
+			)}
 			<header className="flex items-center gap-3 border-b border-[var(--wa-border)] bg-[var(--wa-panel)] px-4 py-2.5">
 				<button
 					type="button"
@@ -230,10 +243,52 @@ export function ChatWindow(props: {
 						const quote = m.quoteId
 							? conversation.data?.quotes.find((q) => q.id === m.quoteId)
 							: undefined;
+						const invoice = m.invoiceId
+							? conversation.data?.invoices.find((x) => x.id === m.invoiceId)
+							: undefined;
+						const payment = m.paymentId
+							? conversation.data?.payments.find((x) => x.id === m.paymentId)
+							: undefined;
 						return (
 							<Fragment key={m.id}>
 								{newDay && <DayChip label={dayLabel(m.createdAt)} />}
-								{quote ? (
+								{invoice ? (
+									<div className="mt-2 flex max-w-[85%] flex-col self-start md:max-w-[65%]">
+										<Bubble
+											out={false}
+											first
+											time={clock(m.createdAt)}
+											className="mt-0 max-w-none self-stretch md:max-w-none"
+										>
+											<InvoiceCard invoice={invoice} />
+											{m.body}
+										</Bubble>
+										<PayButton
+											invoice={invoice}
+											onPay={() => setPayingId(invoice.id)}
+										/>
+									</div>
+								) : payment ? (
+									<Bubble
+										out
+										first
+										time={clock(m.createdAt)}
+										ticks={read ? "read" : "delivered"}
+									>
+										<PaymentCard
+											payment={payment}
+											invoice={conversation.data?.invoices.find(
+												(x) => x.id === payment.invoiceId,
+											)}
+											businessName={business.name}
+										/>
+									</Bubble>
+								) : m.document ? (
+									<Bubble out={false} first={first} time={clock(m.createdAt)}>
+										<DocLink doc={m.document} />
+										{m.body}
+									</Bubble>
+								) : quote ? (
 									<div className="mt-2 flex max-w-[85%] flex-col self-start md:max-w-[65%]">
 										<Bubble
 											out={false}

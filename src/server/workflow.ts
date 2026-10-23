@@ -41,6 +41,7 @@ import {
 	describeIssue,
 	recapNote,
 } from "#/lib/availability";
+import { withSchedule } from "#/lib/billing";
 import { resolveRelativeDate } from "#/lib/dates";
 import {
 	type Assessment,
@@ -69,6 +70,7 @@ import {
 	readTurn,
 	writeReply,
 } from "./ai";
+import { issueInvoices } from "./billing";
 import {
 	onCustomerReplyToQuote,
 	onQuoteClosed,
@@ -76,8 +78,9 @@ import {
 	onQuoteSent,
 	todayMY,
 } from "./followups";
-import { matchRelayAnswer, notify } from "./jobs";
+import { matchRelayAnswer } from "./jobs";
 import { findKnowledge } from "./knowledge";
+import { notify } from "./notify";
 import { emitOrbyteEvent } from "./orbyte";
 import { formatMYR, priceBrief, totals } from "./pricing";
 import { createRequest, saveRequest, snapshotBrief } from "./requirements";
@@ -952,7 +955,7 @@ async function advanceRequest(a: Advance): Promise<{
 			brief.revisionOf,
 			products,
 			catalog.questions,
-			addWeeks(result.terms, estimated.weeks),
+			withSchedule(addWeeks(result.terms, estimated.weeks), business.billing),
 		);
 		if (result.lineItems.length) {
 			await run.add({
@@ -2174,14 +2177,20 @@ function quoteMessage(input: {
 	]
 		.filter(Boolean)
 		.join(" + ");
-	const total = plus ? `${input.total} + ${plus}` : input.total;
+	const sst = !input.sst
+		? ""
+		: { en: " (incl. SST)", ms: " (termasuk SST)", zh: "（含SST）" }[
+				input.language === "mixed" ? "en" : input.language
+			];
+	// SST applies to the one-time total; recurring fees follow it.
+	const total = `${input.total}${sst}${plus ? ` + ${plus}` : ""}`;
 	switch (input.language) {
 		case "ms":
-			return `Hi ${name}, ini ${input.revision ? "sebut harga yang dikemas kini" : "sebut harga"} ${number} 👇\nJumlah: ${total}${input.sst ? " (termasuk SST)" : ""}\nSah sehingga ${validUntil}\n\nBoleh semak dulu, kalau ok tekan "Review & sign" ya. Ada soalan, tanya je kat sini.`;
+			return `Hi ${name}, ini ${input.revision ? "sebut harga yang dikemas kini" : "sebut harga"} ${number} 👇\nJumlah: ${total}\nSah sehingga ${validUntil}\n\nBoleh semak dulu, kalau ok tekan "Review & sign" ya. Ada soalan, tanya je kat sini.`;
 		case "zh":
-			return `${name}您好，这是${input.revision ? "更新后的" : "您的"}报价单 ${number} 👇\n总额：${total}${input.sst ? "（含SST）" : ""}\n有效期至 ${validUntil}\n\n您先看看，没问题的话点 "Review & sign" 签署就可以了。有任何问题随时问我们。`;
+			return `${name}您好，这是${input.revision ? "更新后的" : "您的"}报价单 ${number} 👇\n总额：${total}\n有效期至 ${validUntil}\n\n您先看看，没问题的话点 "Review & sign" 签署就可以了。有任何问题随时问我们。`;
 		default:
-			return `Hi ${name}, here's ${input.revision ? "the updated quotation" : "your quotation"} ${number} 👇\nTotal: ${total}${input.sst ? " (incl. SST)" : ""}\nValid until ${validUntil}\n\nHave a look, and tap "Review & sign" when you're happy with it. Any questions, just ask here.`;
+			return `Hi ${name}, here's ${input.revision ? "the updated quotation" : "your quotation"} ${number} 👇\nTotal: ${total}\nValid until ${validUntil}\n\nHave a look, and tap "Review & sign" when you're happy with it. Any questions, just ask here.`;
 	}
 }
 
@@ -2594,7 +2603,7 @@ export async function signQuote(input: {
 	signerName: string;
 	signatureImage: string;
 }) {
-	return getDb().transaction(async (db) => {
+	const signed = await getDb().transaction(async (db) => {
 		const initial = await db.query.quotes.findFirst({
 			where: eq(schema.quotes.id, input.quoteId),
 		});
@@ -2732,6 +2741,11 @@ export async function signQuote(input: {
 		await enqueueTask(db, "create_handover", quote.id);
 		return row;
 	});
+	// A deposit or pay-upfront instalment is invoiced as soon as they sign.
+	await issueInvoices(signed.id, { kind: "signed" }).catch((err) =>
+		console.error("[billing] invoice on signing", err),
+	);
+	return signed;
 }
 
 /** A signed quote reserves its stock items so they are not promised twice. */

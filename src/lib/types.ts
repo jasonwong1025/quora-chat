@@ -2,6 +2,7 @@ import type { InferRouterOutputs } from "@orpc/server";
 import type router from "#/orpc/router";
 
 type Outputs = InferRouterOutputs<typeof router>;
+export type JobBilling = Outputs["billing"]["job"];
 
 export type BusinessDetail = Outputs["businesses"]["get"];
 export type Staff = BusinessDetail["staff"][number];

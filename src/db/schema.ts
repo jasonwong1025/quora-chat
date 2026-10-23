@@ -42,8 +42,37 @@ export const businesses = pgTable("businesses", {
 		.default([1, 2, 3, 4, 5, 6])
 		.notNull(), // 0 = Sunday
 	extendDays: integer("extend_days").default(7).notNull(),
+	/** How this business gets paid and which documents it sends (see BillingSettings). */
+	billing: jsonb("billing").$type<BillingSettings | null>(),
 	createdAt: createdAt(),
 });
+
+/**
+ * When an instalment is invoiced: when the customer signs, when every task in a
+ * quotation phase is done, or when the whole job is completed.
+ */
+export type InstalmentTrigger = "signed" | "phase" | "completed";
+
+/** One part of a payment schedule, e.g. "40% deposit on signing". */
+export type Instalment = {
+	label: string;
+	percent: number;
+	/** Older quotes have no trigger; see `instalmentsFor`. */
+	when?: InstalmentTrigger;
+	/** The quotation phase that triggers it, when `when` is "phase". */
+	phase?: string | null;
+};
+
+/** A business's billing model. Quotes can override the schedule (custom items' price lists do). */
+export type BillingSettings = {
+	/** Default schedule for quotes without their own (e.g. fixed-price items). */
+	schedule: Instalment[];
+	/** Invoices are due this many days after they're sent. */
+	dueDays: number;
+	/** Extra documents sent when a job is completed. */
+	statement: boolean;
+	completionReport: boolean;
+};
 
 /** "stock" items are counted and reserved; "service" covers services and made-to-order work. */
 export const productType = pgEnum("product_type", ["stock", "service"]);
@@ -115,7 +144,7 @@ export type PriceBuilder = {
 	/** Empty = no timeline on the quote. Extra weeks go to the longest phase. */
 	phases: { name: string; weeks: number }[];
 	/** Empty = paid in full. Percents add up to 100. */
-	payments: { label: string; percent: number }[];
+	payments: Instalment[];
 	assumptions: string[];
 	exclusions: string[];
 };
@@ -123,7 +152,7 @@ export type PriceBuilder = {
 /** Timeline, payment schedule and terms printed on a custom quotation. */
 export type QuoteTerms = {
 	phases: { name: string; weeks: number }[];
-	payments: { label: string; percent: number }[];
+	payments: Instalment[];
 	assumptions: string[];
 	exclusions: string[];
 };
@@ -246,6 +275,10 @@ export const messages = pgTable("messages", {
 	sender: messageSender("sender").notNull(),
 	body: text("body").notNull(),
 	quoteId: text("quote_id"), // set when the message carries an approved quote
+	invoiceId: text("invoice_id"), // an invoice card with "Review and pay"
+	paymentId: text("payment_id"), // the customer's payment bubble
+	/** A business document sent in the chat (receipt, statement, completion report). */
+	document: jsonb("document").$type<ChatDocument | null>(),
 	authorName: text("author_name"), // staff member who wrote it, if any
 	/** A photo or document sent with the message. Data is served from /api/messages/:id/attachment. */
 	attachment: jsonb("attachment").$type<Attachment | null>(),
@@ -254,6 +287,13 @@ export const messages = pgTable("messages", {
 });
 
 export type Attachment = { name: string; mime: string; size: number };
+
+export type ChatDocument = {
+	kind: "receipt" | "statement" | "completion_report";
+	/** Payment id for receipts, job id for statements and completion reports. */
+	id: string;
+	name: string; // e.g. "KD-OR-0001.pdf"
+};
 
 export const requestStatus = pgEnum("request_status", [
 	"gathering", // AI is asking the customer for requirements
@@ -464,11 +504,13 @@ export const quoteFollowUps = pgTable("quote_follow_ups", {
 	quoteId: text("quote_id")
 		.notNull()
 		.references(() => quotes.id, { onDelete: "cascade" }),
+	/** Set for payment reminders: the unpaid invoice. */
+	invoiceId: text("invoice_id"),
 	conversationId: text("conversation_id")
 		.notNull()
 		.references(() => conversations.id, { onDelete: "cascade" }),
 	kind: text("kind")
-		.$type<"reminder" | "extension">()
+		.$type<"reminder" | "extension" | "payment_reminder">()
 		.default("reminder")
 		.notNull(),
 	status: text("status")
@@ -687,6 +729,9 @@ export const jobTasks = pgTable("job_tasks", {
 		.references(() => jobs.id, { onDelete: "cascade" }),
 	title: text("title").notNull(),
 	status: taskStatus("status").default("todo").notNull(),
+	/** The quotation phase this task belongs to; finishing a phase can trigger an invoice. */
+	phase: text("phase"),
+	doneAt: timestamp("done_at", { withTimezone: true }),
 	note: text("note"), // e.g. what's blocking it
 	position: integer("position").default(0).notNull(),
 	source: text("source").default("staff").notNull(), // "ai" | "staff" | "bot"
@@ -791,6 +836,61 @@ export const relayStatus = pgEnum("relay_status", [
 	"answered",
 	"rejected",
 ]);
+
+// --- Billing: invoices, payments and receipts --------------------------------------------
+
+export const invoiceStatus = pgEnum("invoice_status", ["sent", "paid", "void"]);
+
+/** One instalment of a signed quotation, invoiced when its trigger happens. */
+export const invoices = pgTable(
+	"invoices",
+	{
+		id: id(),
+		number: text("number").notNull().unique(), // e.g. "KD-INV-0001"
+		businessId: text("business_id")
+			.notNull()
+			.references(() => businesses.id, { onDelete: "cascade" }),
+		quoteId: text("quote_id")
+			.notNull()
+			.references(() => quotes.id, { onDelete: "cascade" }),
+		conversationId: text("conversation_id")
+			.notNull()
+			.references(() => conversations.id, { onDelete: "cascade" }),
+		/** Position in the quote's payment schedule. */
+		instalment: integer("instalment").notNull(),
+		label: text("label").notNull(), // e.g. "Deposit on signing"
+		percent: integer("percent").notNull(),
+		amountSen: integer("amount_sen").notNull(), // incl. SST
+		status: invoiceStatus("status").default("sent").notNull(),
+		issuedAt: timestamp("issued_at", { withTimezone: true })
+			.defaultNow()
+			.notNull(),
+		dueAt: timestamp("due_at", { withTimezone: true }).notNull(),
+		paidAt: timestamp("paid_at", { withTimezone: true }),
+		remindersPaused: boolean("reminders_paused").default(false).notNull(),
+		createdAt: createdAt(),
+	},
+	(t) => [uniqueIndex("invoices_quote_instalment").on(t.quoteId, t.instalment)],
+);
+
+/** Money received against an invoice. Each one gets an official receipt. */
+export const payments = pgTable("payments", {
+	id: id(),
+	businessId: text("business_id")
+		.notNull()
+		.references(() => businesses.id, { onDelete: "cascade" }),
+	invoiceId: text("invoice_id")
+		.notNull()
+		.references(() => invoices.id, { onDelete: "cascade" }),
+	receiptNumber: text("receipt_number").notNull().unique(), // e.g. "KD-OR-0001"
+	amountSen: integer("amount_sen").notNull(),
+	/** "card" is the simulated WhatsApp pay; the others are recorded by staff. */
+	method: text("method").$type<"card" | "bank_transfer" | "cash">().notNull(),
+	reference: text("reference"), // card "Visa •1234", bank reference, …
+	recordedBy: text("recorded_by").notNull(), // customer name or staff name
+	paidAt: timestamp("paid_at", { withTimezone: true }).defaultNow().notNull(),
+	createdAt: createdAt(),
+});
 
 export const relays = pgTable("relays", {
 	id: id(),

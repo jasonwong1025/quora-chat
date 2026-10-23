@@ -11,6 +11,7 @@ import {
 } from "@react-pdf/renderer";
 import type { schema } from "#/db";
 import { agreementLines } from "#/lib/agreements";
+import { triggerLabel } from "#/lib/billing";
 import {
 	chargeLabel,
 	chargeSuffix,
@@ -32,7 +33,7 @@ Font.register({
 		: resolve(".output/public/fonts/NotoSansSC-Regular.otf"),
 });
 
-const s = StyleSheet.create({
+export const s = StyleSheet.create({
 	page: {
 		padding: 40,
 		fontSize: 10,
@@ -224,6 +225,7 @@ export async function renderQuotePdf(input: {
 									>
 										<Text>
 											{p.percent}% {p.label}
+											{p.when ? ` · ${triggerLabel(p)}` : ""}
 										</Text>
 										<Text>{formatMYR(p.amountSen)}</Text>
 									</View>

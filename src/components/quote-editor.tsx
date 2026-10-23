@@ -696,11 +696,46 @@ function TermsEditor(props: {
 						/>
 						<span className="self-center text-xs text-muted-foreground">%</span>
 						<Input
-							aria-label={`Payment ${i + 1} when`}
+							aria-label={`Payment ${i + 1} name`}
 							value={p.label}
 							onChange={(e) => setPayment(i, { label: e.target.value })}
-							className="h-8 flex-1"
+							className="h-8 min-w-0 flex-1"
 						/>
+						<Select
+							value={
+								p.when === "phase" && p.phase
+									? `phase:${p.phase}`
+									: (p.when ??
+										(i === 0 && t.payments.length > 1 ? "signed" : "completed"))
+							}
+							onValueChange={(v) =>
+								setPayment(
+									i,
+									v.startsWith("phase:")
+										? { when: "phase", phase: v.slice(6) }
+										: { when: v as "signed" | "completed", phase: null },
+								)
+							}
+						>
+							<SelectTrigger
+								size="sm"
+								className="w-36 shrink-0"
+								aria-label={`Payment ${i + 1} due`}
+							>
+								<SelectValue />
+							</SelectTrigger>
+							<SelectContent position="popper">
+								<SelectItem value="signed">On signing</SelectItem>
+								{t.phases
+									.filter((ph) => ph.name.trim())
+									.map((ph) => (
+										<SelectItem key={ph.name} value={`phase:${ph.name}`}>
+											After {ph.name}
+										</SelectItem>
+									))}
+								<SelectItem value="completed">On completion</SelectItem>
+							</SelectContent>
+						</Select>
 						<Button
 							variant="ghost"
 							size="icon"

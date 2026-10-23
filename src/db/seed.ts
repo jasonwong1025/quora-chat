@@ -54,6 +54,7 @@ async function main() {
 				openingHours: b.openingHours,
 				sstRateBps: b.sstRateBps,
 				quoteValidityDays: b.quoteValidityDays,
+				billing: b.billing,
 			});
 			const staff = await tx
 				.insert(schema.staff)

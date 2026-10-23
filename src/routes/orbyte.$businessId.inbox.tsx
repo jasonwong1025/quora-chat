@@ -2,10 +2,12 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { createFileRoute, Link } from "@tanstack/react-router";
 import {
 	Bot,
+	CreditCard,
 	FileText,
 	Hand,
 	Loader2,
 	MessagesSquare,
+	Receipt,
 	SendHorizontal,
 	UserRound,
 } from "lucide-react";
@@ -19,6 +21,7 @@ import { useWorkspace } from "#/components/orbyte/workspace";
 import { StatusBadge } from "#/components/status-badge";
 import { Button } from "#/components/ui/button";
 import { Textarea } from "#/components/ui/textarea";
+import { formatMYR } from "#/lib/money";
 import { avatarHue, clock, dayLabel, initials, listTime } from "#/lib/time";
 import type { InboxRow } from "#/lib/types";
 import { cn } from "#/lib/utils";
@@ -274,6 +277,12 @@ function Conversation({ row, onBack }: { row: InboxRow; onBack: () => void }) {
 						const quote = conversation.data?.quotes.find(
 							(q) => q.id === m.quoteId,
 						);
+						const invoice = conversation.data?.invoices.find(
+							(x) => x.id === m.invoiceId,
+						);
+						const payment = conversation.data?.payments.find(
+							(x) => x.id === m.paymentId,
+						);
 						return (
 							<Fragment key={m.id}>
 								{newDay && (
@@ -334,6 +343,35 @@ function Conversation({ row, onBack }: { row: InboxRow; onBack: () => void }) {
 											{quote.status === "accepted"
 												? "Signed"
 												: "Sent for signature"}
+										</a>
+									)}
+									{invoice && (
+										<a
+											href={`/api/documents/invoice/${invoice.id}`}
+											target="_blank"
+											rel="noreferrer"
+											className="mb-1.5 flex items-center gap-2 bg-white/60 px-2.5 py-2 text-xs hover:bg-white"
+										>
+											<Receipt className="size-4" /> {invoice.number} ·{" "}
+											{invoice.label} · {formatMYR(invoice.amountSen)} ·{" "}
+											{invoice.status === "paid" ? "Paid" : "Payment pending"}
+										</a>
+									)}
+									{payment && (
+										<p className="mb-1.5 flex items-center gap-2 bg-status-approved/10 px-2.5 py-2 text-xs text-status-approved">
+											<CreditCard className="size-4" /> Paid{" "}
+											{formatMYR(payment.amountSen)} by{" "}
+											{payment.reference ?? payment.method}
+										</p>
+									)}
+									{m.document && (
+										<a
+											href={`/api/documents/${m.document.kind}/${m.document.id}`}
+											target="_blank"
+											rel="noreferrer"
+											className="mb-1.5 flex items-center gap-2 bg-white/60 px-2.5 py-2 text-xs hover:bg-white"
+										>
+											<FileText className="size-4" /> {m.document.name}
 										</a>
 									)}
 									{m.attachment &&
