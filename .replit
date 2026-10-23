@@ -1,5 +1,5 @@
 run = "pnpm install && pnpm dev"
-modules = ["nodejs-22"]
+modules = ["nodejs-20", "web", "python-3.12"]
 [[ports]]
 localPort = 3000
 externalPort = 80
@@ -14,3 +14,6 @@ deploymentTarget = "autoscale"
 build = ["sh", "-c", "pnpm install --frozen-lockfile && pnpm build"]
 # Apply checksummed, additive migrations, then run the web app and the worker together.
 run = ["sh", "-c", "pnpm db:migrate && pnpm start:with-worker"]
+
+[nix]
+channel = "stable-25_05"
