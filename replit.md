@@ -23,11 +23,11 @@ AI uses only Replit-managed OpenAI, default model `gpt-5-mini`. It requires
 `AI_INTEGRATIONS_OPENAI_BASE_URL` and `AI_INTEGRATIONS_OPENAI_API_KEY`.
 Never invent credentials or replace the provider silently.
 
-At setup time the managed AI integration was not available through this Agent
-session's connection tools. Its settings were absent: the UI and worker start,
-but live AI calls remain blocked until the integration is enabled.
+The managed OpenAI integration is enabled (provisioned with
+`setupReplitAIIntegrations({ providerSlug: "openai" })`, after phone
+verification) and a live strict-JSON call to `gpt-5-mini` succeeded.
 
-Once enabled, run `bash scripts/replit-setup.sh`; it preserves an already
+`bash scripts/replit-setup.sh` preserves an already
 initialized database and applies only pending development migrations.
 Never run `db:push` on an initialized database: the migration history and
 additional SQL-managed indexes are not all represented in Drizzle's schema.
@@ -36,7 +36,7 @@ additional SQL-managed indexes are not all represented in Drizzle's schema.
 
 Type checking, unit tests, and the production build passed. Both staff and
 customer pages were visually checked, and the health endpoint succeeded.
-Live AI could not be verified without the managed integration.
+Live AI was verified with a direct structured-output call.
 
 The database integration test harness needs PostgreSQL binaries via
 `PG_BIN="$(dirname "$(command -v initdb)")"` on Nix. It also reads a historical

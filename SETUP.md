@@ -21,7 +21,7 @@ Ask Replit Agent:
 
 > Enable Replit AI Integrations for OpenAI in this project. Do not change any code.
 
-Approve the connection prompt if offered. The integration supplies
+Phone verification may be required first. The integration supplies
 `AI_INTEGRATIONS_OPENAI_BASE_URL` and `AI_INTEGRATIONS_OPENAI_API_KEY`.
 No OpenRouter or personal OpenAI key is used. The default model is `gpt-5-mini`.
 AI usage is billed through Replit.
