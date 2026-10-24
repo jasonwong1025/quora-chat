@@ -31,7 +31,7 @@
 | Replit Project    | https://replit.com/@RyanLau7/quora-chat                              |
 | Live Demo         | https://quora-chat.replit.app/                                       |
 | Slide Deck        | [docs/Quora Chat Pitch Deck.pdf](<docs/Quora Chat Pitch Deck.pdf>)   |
-| Demo Video        | _Coming soon_ <!-- TODO: replace with the demo video URL -->         |
+| Demo Video        | https://youtu.be/V8LL5Kc8StU                                          |
 
 ---
 
