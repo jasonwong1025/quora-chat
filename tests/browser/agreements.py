@@ -15,13 +15,20 @@ with sync_playwright() as p:
     expect(page.get_by_text("Requirements changed after this draft was prepared.", exact=False)).to_be_visible()
     expect(page.get_by_role("button", name="Approve & send")).to_have_count(0)
     page.screenshot(path=str(artifacts / "outdated-draft.png"), full_page=True)
+    # The request panel opens on the Quotation tab; waiving and drafting live on Requirements.
+    page.get_by_role("tab", name="Requirements").click()
     page.get_by_role("button", name="Waive with a reason").click()
     page.get_by_label("Reason for waiving this requirement").fill("Confirm user count during paid discovery")
     page.get_by_role("button", name="Waive", exact=True).click()
     expect(page.get_by_text("(waived: Confirm user count during paid discovery)", exact=True)).to_be_visible()
     page.get_by_role("button", name="Draft now", exact=True).click()
+    # Redrafting updates the same quote, so open the Quotation tab. It now matches the
+    # current requirements, so it can be approved.
+    expect(page.get_by_text("Check 1 flagged item, then approve", exact=False)).to_be_visible()
+    page.get_by_role("tab", name="Quotation").click()
     expect(page.get_by_role("button", name="Approve & send")).to_be_visible()
-    expect(page.get_by_text("Quotation · requirements version 3", exact=False)).to_be_visible()
+    expect(page.get_by_text("Requirements changed after this draft was prepared.", exact=False)).to_have_count(0)
+    expect(page.get_by_text("Draft · pending approval", exact=False)).to_be_visible()
     page.screenshot(path=str(artifacts / "reviewed-draft.png"), full_page=True)
     page.goto(base + "/orbyte/agreement-preview/work/preview-job")
     page.wait_for_load_state("networkidle")
