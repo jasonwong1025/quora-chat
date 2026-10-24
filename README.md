@@ -349,12 +349,12 @@ The database and browser tests start their own PostgreSQL cluster and mock the A
 
 - [x] Team name, domain (Domain 1 / Domain 2) and SDG track filled in
 - [x] Slide deck link added
-- [ ] Demo video link added
+- [x] Demo video link added
 - [x] Replit used, with proof of use in `submission/`
 - [x] Preliminary submission completed (`SDC2026_HTL_Preliminary.pdf`)
 - [x] Technology declaration completed (`SDC2026_HTL_TechDeclaration.pdf`)
 - [x] Submission files renamed with your team name (replace `TeamName`)
-- [ ] "How to Run" steps verified
+- [x] "How to Run" steps verified
 - [x] No API keys or secrets committed to the repository
 
 ## License
