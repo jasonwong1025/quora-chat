@@ -198,9 +198,15 @@ export function ChatWindow(props: {
 					</p>
 				</div>
 				<div className="flex items-center gap-1 text-[var(--wa-muted)]">
-					{[Video, Search, MoreVertical].map((Icon, i) => (
+					{(
+						[
+							["video", Video],
+							["search", Search],
+							["menu", MoreVertical],
+						] as const
+					).map(([name, Icon]) => (
 						<span
-							key={i}
+							key={name}
 							title="Not part of the demo"
 							className="rounded-full p-2 hover:bg-[var(--wa-hover)]"
 						>

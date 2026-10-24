@@ -1674,6 +1674,7 @@ function Sources({
 				if (s.kind === "knowledge")
 					return (
 						<Link
+							// biome-ignore lint/suspicious/noArrayIndexKey: read-only list that never reorders; entries can repeat, so the position is the identity
 							key={`${s.kind}-${s.label}-${i}`}
 							to="/orbyte/$businessId/knowledge"
 							params={{ businessId: business.id }}
@@ -1687,6 +1688,7 @@ function Sources({
 				const clickable = Boolean(s.ref);
 				return (
 					<button
+						// biome-ignore lint/suspicious/noArrayIndexKey: read-only list that never reorders; entries can repeat, so the position is the identity
 						key={`${s.kind}-${s.label}-${i}`}
 						type="button"
 						disabled={!clickable}

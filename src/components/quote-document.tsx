@@ -141,6 +141,7 @@ export function QuoteDocument({ q }: { q: QuoteDetail }) {
 					</h2>
 					<ul className="mt-2 space-y-1">
 						{agreementLines(q.requirementsSnapshot).map((line, i) => (
+							// biome-ignore lint/suspicious/noArrayIndexKey: read-only list that never reorders; entries can repeat, so the position is the identity
 							<li key={`${i}:${line}`}>{line}</li>
 						))}
 					</ul>
@@ -189,6 +190,7 @@ export function QuoteTermsView({
 					</h2>
 					<ol className="mt-2 space-y-1">
 						{terms.phases.map((p, i) => (
+							// biome-ignore lint/suspicious/noArrayIndexKey: read-only list that never reorders; entries can repeat, so the position is the identity
 							<li key={`${i}-${p.name}`} className="flex justify-between gap-2">
 								<span>
 									{i + 1}. {p.name}
@@ -207,6 +209,7 @@ export function QuoteTermsView({
 					<ul className="mt-2 space-y-1">
 						{paymentAmounts(terms, totalSen).map((p, i) => (
 							<li
+								// biome-ignore lint/suspicious/noArrayIndexKey: read-only list that never reorders; entries can repeat, so the position is the identity
 								key={`${i}-${p.label}`}
 								className="flex justify-between gap-2"
 							>

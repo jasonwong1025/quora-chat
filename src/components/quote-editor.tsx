@@ -48,6 +48,10 @@ const quoteStatusLabel: Record<Quote["status"], string> = {
 	cancelled: "Cancelled by customer",
 };
 
+// Client-side React keys for editable lines, so removing a line doesn't reuse another line's inputs.
+let lineKeySeq = 0;
+const newLineKey = () => `line-${++lineKeySeq}`;
+
 /** Render with a `key` that changes when the server version changes, to reset local edits. */
 export function QuoteEditor(props: {
 	business: BusinessDetail;
@@ -58,6 +62,9 @@ export function QuoteEditor(props: {
 	const { business, quote, actingAs } = props;
 	const queryClient = useQueryClient();
 	const [lines, setLines] = useState<LineItem[]>(quote.lineItems);
+	const [lineKeys, setLineKeys] = useState<string[]>(() =>
+		quote.lineItems.map(newLineKey),
+	);
 	const [notes, setNotes] = useState(quote.notes ?? "");
 	const [terms, setTerms] = useState<QuoteTerms | null>(quote.terms ?? null);
 	const [dirty, setDirty] = useState(false);
@@ -207,7 +214,7 @@ export function QuoteEditor(props: {
 				// Editing: one card per line, so the fields stay usable in a narrow side panel.
 				<ul className="divide-y">
 					{lines.map((l, i) => (
-						<li key={`${quote.id}-${i}`} className="space-y-2 px-3 py-2.5">
+						<li key={lineKeys[i]} className="space-y-2 px-3 py-2.5">
 							<div>
 								<div className="flex gap-1">
 									<Input
@@ -224,6 +231,7 @@ export function QuoteEditor(props: {
 										onClick={() => {
 											setDirty(true);
 											setLines((ls) => ls.filter((_, idx) => idx !== i));
+											setLineKeys((ks) => ks.filter((_, idx) => idx !== i));
 										}}
 									>
 										<Trash2 className="size-4" />
@@ -343,7 +351,7 @@ export function QuoteEditor(props: {
 								),
 								...group.lines.map(({ line: l, index: i }) => (
 									<tr
-										key={`${quote.id}-${i}`}
+										key={lineKeys[i]}
 										className="border-b align-top last:border-0"
 									>
 										<td className="px-3 py-1.5">
@@ -390,6 +398,7 @@ export function QuoteEditor(props: {
 									amountSen: 0,
 								},
 							]);
+							setLineKeys((ks) => [...ks, newLineKey()]);
 						}}
 					>
 						<Plus className="size-4" /> Add line

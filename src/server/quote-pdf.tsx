@@ -223,6 +223,7 @@ export async function renderQuotePdf(input: {
 								</Text>
 								{quote.terms.phases.map((p, i) => (
 									<View
+										// biome-ignore lint/suspicious/noArrayIndexKey: read-only list that never reorders; entries can repeat, so the position is the identity
 										key={`${i}-${p.name}`}
 										style={[s.between, { marginTop: 3 }]}
 									>
@@ -241,6 +242,7 @@ export async function renderQuotePdf(input: {
 								<Text style={s.bold}>Payment schedule</Text>
 								{paymentAmounts(quote.terms, quote.totalSen).map((p, i) => (
 									<View
+										// biome-ignore lint/suspicious/noArrayIndexKey: read-only list that never reorders; entries can repeat, so the position is the identity
 										key={`${i}-${p.label}`}
 										style={[s.between, { marginTop: 3 }]}
 									>
@@ -286,6 +288,7 @@ export async function renderQuotePdf(input: {
 					<View style={{ marginTop: 24 }}>
 						<Text style={s.bold}>Requirements included in this quotation</Text>
 						{agreementLines(quote.requirementsSnapshot).map((line, i) => (
+							// biome-ignore lint/suspicious/noArrayIndexKey: read-only list that never reorders; entries can repeat, so the position is the identity
 							<Text key={`${i}:${line}`} style={{ marginTop: 4 }}>
 								{line}
 							</Text>

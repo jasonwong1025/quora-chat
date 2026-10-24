@@ -155,6 +155,7 @@ export function RequestDetail(props: {
 							<ul className="space-y-1.5">
 								{request.flags.map((f, i) => (
 									<li
+										// biome-ignore lint/suspicious/noArrayIndexKey: read-only list that never reorders; entries can repeat, so the position is the identity
 										key={`${f.kind}-${i}`}
 										className={cn(
 											"flex items-start gap-2 bg-muted/60 px-3 py-2 text-sm",
