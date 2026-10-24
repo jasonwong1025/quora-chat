@@ -1,7 +1,10 @@
-# Quora Chat
+# Quora Chat: Replit workspace notes
+
+Notes for working on Quora Chat inside the team's Replit workspace
+(https://replit.com/@RyanLau7/quora-chat, published at https://quora-chat.replit.app/).
+Project overview: [README](README.md). Setup and publishing: [docs/SETUP.md](docs/SETUP.md).
 
 Keep the existing TanStack Start / Hono / oRPC / Drizzle stack and repository layout.
-Setup is based on the repository's `replit/managed-openai-deploy` branch.
 
 ## Run
 
@@ -15,8 +18,8 @@ Setup is based on the repository's `replit/managed-openai-deploy` branch.
 
 ## Database and AI
 
-Replit supplies `DATABASE_URL`. The empty development database has been
-initialized with the schema, eight migrations, and five synthetic businesses.
+Replit supplies `DATABASE_URL`. The development database has been
+initialized with the schema, the migrations in `migrations/`, and five synthetic businesses.
 Do not seed or reset it again unless the user deliberately requests a reset.
 
 AI supports two providers: Replit-managed OpenAI (used first when
@@ -51,4 +54,4 @@ Do not publish automatically. Use a Reserved VM for the continuous worker.
 The production start command runs web and worker without database schema writes;
 Replit's Publish flow handles managed production schema changes.
 The staff selector is not authentication: restrict access before publishing.
-See `SETUP.md` for setup and publishing guidance.
+See [docs/SETUP.md](docs/SETUP.md) for setup and publishing guidance.

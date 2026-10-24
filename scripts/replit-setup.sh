@@ -71,4 +71,4 @@ step "Building (same command the deployment uses)"
 "${PNPM[@]}" build >/dev/null
 echo "build ok"
 
-printf '\nDone. Press Run to start the app and worker (port 5000), then follow SETUP.md to publish.\n'
+printf '\nDone. Press Run to start the app and worker (port 5000), then follow docs/SETUP.md to publish.\n'

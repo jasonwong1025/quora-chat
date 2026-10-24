@@ -1,5 +1,5 @@
 /**
- * Synthetic evaluation (docs/EVALUATION.md). Plays scripted customer conversations
+ * Synthetic evaluation. Plays scripted customer conversations
  * through the real workflow against the configured AI (live model, or replay with
  * AI_MODE=replay), then approves, signs, runs the handover worker and asks the team
  * AI about the job. Prints measured results as JSON.
